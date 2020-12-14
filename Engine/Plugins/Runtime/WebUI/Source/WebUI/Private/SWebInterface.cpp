@@ -13,6 +13,20 @@
 #include "Input/Reply.h"
 #include "Widgets/Layout/SBorder.h"
 
+struct WebBrowserStatics
+{
+	WebBrowserStatics()
+	{
+		IWebBrowserSingleton* Singleton = IWebBrowserModule::Get().GetSingleton();
+		if ( Singleton )
+		{
+			Singleton->RegisterSchemeHandlerFactory( "pak", FString(), new FWebInterfaceSchemeHandlerFactory() );
+			Singleton->SetDevToolsShortcutEnabled( UE_BUILD_DEVELOPMENT || UE_BUILD_DEBUG );
+		}
+	}
+};
+static WebBrowserStatics WebBrowserStatics;
+
 SWebInterface::SWebInterface()
 {
 	bMouseTransparency          = false;
@@ -45,12 +59,6 @@ SWebInterface::~SWebInterface()
 		}
 	}
 #endif
-
-	IWebBrowserSingleton* Singleton = IWebBrowserModule::Get().GetSingleton();
-	if ( Singleton && SchemeFactory.IsValid() )
-		Singleton->UnregisterSchemeHandlerFactory( SchemeFactory.Get() );
-
-	SchemeFactory.Reset();
 }
 
 void SWebInterface::Construct( const FArguments& InArgs )
@@ -85,20 +93,7 @@ void SWebInterface::Construct( const FArguments& InArgs )
 
 	IWebBrowserSingleton* Singleton = IWebBrowserModule::Get().GetSingleton();
 	if ( Singleton )
-	{
-		Singleton->SetDevToolsShortcutEnabled( Settings.bShowErrorMessage );
 		BrowserWindow = Singleton->CreateBrowserWindow( Settings );
-
-		FString Scheme = InArgs._ContentScheme.TrimStartAndEnd();
-		if ( Scheme.EndsWith( "://" ) )
-			Scheme = Scheme.LeftChop( 3 );
-
-		if ( Scheme.Len() > 0 )
-		{
-			SchemeFactory = MakeShareable( new FWebInterfaceSchemeHandlerFactory );
-			Singleton->RegisterSchemeHandlerFactory( Scheme, FString(), SchemeFactory.Get() );
-		}
-	}
 
 	ChildSlot
 	[

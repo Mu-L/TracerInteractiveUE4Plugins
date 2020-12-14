@@ -43,8 +43,6 @@ UWebInterface::UWebInterface( const FObjectInitializer& ObjectInitializer )
 	Visibility  = ESlateVisibility::SelfHitTestInvisible;
 	FrameRate   = 60;
 
-	ContentScheme = "pak://";
-
 	bEnableMouseTransparency   = false;
 	MouseTransparencyThreshold = 0.333f;
 	MouseTransparencyDelay     = 0.1f;
@@ -71,10 +69,11 @@ UWebInterface::UWebInterface( const FObjectInitializer& ObjectInitializer )
 
 bool UWebInterface::Load( const FString& File )
 {
-	if ( File.Len() <= 0 || ContentScheme.Len() <= 0 )
+	static FString Scheme = "pak";
+	if ( File.Len() <= 0 )
 		return false;
 
-	FString URL = ContentScheme;
+	FString URL = Scheme;
 	if ( !URL.EndsWith( "://" ) )
 		URL += "://";
 
@@ -464,7 +463,6 @@ TSharedRef<SWidget> UWebInterface::RebuildWidget()
 
 	WebInterfaceWidget = SNew( SWebInterface )
 		.FrameRate( FrameRate )
-		.ContentScheme( ContentScheme )
 		.InitialURL( InitialURL )
 		.EnableMouseTransparency( bEnableMouseTransparency )
 		.EnableVirtualPointerTransparency( bEnableVirtualPointerTransparency )

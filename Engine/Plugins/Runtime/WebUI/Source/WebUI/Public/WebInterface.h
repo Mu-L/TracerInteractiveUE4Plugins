@@ -137,8 +137,6 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Behavior", meta = (UIMin = 1, UIMax = 60))
 	int32 FrameRate;
 	UPROPERTY(EditAnywhere, Category = "Behavior")
-	FString ContentScheme;
-	UPROPERTY(EditAnywhere, Category = "Behavior")
 	FString InitialURL;
 
 	UPROPERTY(EditAnywhere, meta = (DisplayName = "Enable Transparency"), Category = "Behavior|Mouse")
