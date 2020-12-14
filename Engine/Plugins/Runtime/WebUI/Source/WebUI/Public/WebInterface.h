@@ -27,8 +27,8 @@ public:
 	DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams( FOnInterfaceEvent, const FName, Name, FJsonLibraryValue, Data, FWebInterfaceCallback, Callback );
 
 	// Load the browser.
-	UFUNCTION(BlueprintCallable, Category = "Web UI", meta = (AdvancedDisplay = "Scheme"))
-	void Load( const FString& File, const FString& Scheme = "pak://" );
+	UFUNCTION(BlueprintCallable, Category = "Web UI")
+	bool Load( const FString& File );
 	// Load HTML in the browser.
 	UFUNCTION(BlueprintCallable, Category = "Web UI")
 	void LoadHTML( const FString& HTML );

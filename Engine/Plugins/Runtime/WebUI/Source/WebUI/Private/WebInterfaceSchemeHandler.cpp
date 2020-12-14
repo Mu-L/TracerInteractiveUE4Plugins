@@ -99,6 +99,9 @@ void FWebInterfaceSchemeHandler::Cancel()
 
 void FWebInterfaceSchemeHandler::CreateReader( const FString& FilePath )
 {
+	if ( Reader )
+		CloseReader();
+
 	Reader = IFileManager::Get().CreateFileReader( *FilePath );
 }
 

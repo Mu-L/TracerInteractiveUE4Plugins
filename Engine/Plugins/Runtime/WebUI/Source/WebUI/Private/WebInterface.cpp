@@ -69,13 +69,13 @@ UWebInterface::UWebInterface( const FObjectInitializer& ObjectInitializer )
 #endif
 }
 
-void UWebInterface::Load( const FString& File, const FString& Scheme /*= "pak://"*/ )
+bool UWebInterface::Load( const FString& File )
 {
-	if ( File.Len() <= 0 )
-		return;
+	if ( File.Len() <= 0 || ContentScheme.Len() <= 0 )
+		return false;
 
-	FString URL = Scheme;
-	if ( URL.Len() > 0 && !URL.EndsWith( "://" ) )
+	FString URL = ContentScheme;
+	if ( !URL.EndsWith( "://" ) )
 		URL += "://";
 
 	FString FilePath = File;
@@ -87,6 +87,13 @@ void UWebInterface::Load( const FString& File, const FString& Scheme /*= "pak://
 	if ( WebInterfaceWidget.IsValid() )
 		WebInterfaceWidget->LoadURL( URL );
 #endif
+
+	FilePath = FPaths::ProjectContentDir() + File;
+	FilePath = FilePath.Replace( TEXT( "\\" ), TEXT( "/" ) );
+	FilePath = FilePath.Replace( TEXT( "//" ), TEXT( "/" ) );
+
+	const int64 FileSize = IFileManager::Get().FileSize( *FilePath );
+	return FileSize != INDEX_NONE;
 }
 
 void UWebInterface::LoadHTML( const FString& HTML )
