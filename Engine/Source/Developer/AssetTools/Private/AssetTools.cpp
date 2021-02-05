@@ -900,10 +900,13 @@ bool UAssetToolsImpl::AdvancedCopyPackages(const TMap<FString, FString>& SourceA
 						MoveDialogInfo.PGN.PackageName = DestFilename;
 						const bool bShouldPromptForDestinationConflict = !bCopyOverAllDestinationOverlaps;
 						UObject* NewObject = ObjectTools::DuplicateSingleObject(ExistingObject, MoveDialogInfo.PGN, ObjectsUserRefusedToFullyLoad, bShouldPromptForDestinationConflict);
-						NewObjects.Add(NewObject);
-						NewObjectSet.Add(NewObject);
-						SuccessfullyCopiedSourcePackages.Add(PackageName);
-						SuccessfullyCopiedDestinationFiles.Add(DestFilename);
+						if (NewObject)
+						{
+							NewObjects.Add(NewObject);
+							NewObjectSet.Add(NewObject);
+							SuccessfullyCopiedSourcePackages.Add(PackageName);
+							SuccessfullyCopiedDestinationFiles.Add(DestFilename);
+						}
 					}
 				}
 			}
@@ -1802,10 +1805,10 @@ TArray<UObject*> UAssetToolsImpl::ImportAssetsInternal(const TArray<FString>& Fi
 	bool bReplaceAll = false;
 	bool bDontOverwriteAny = false;
 	bool bDontReplaceAny = false;
-	if (Params.AssetImportTask && Params.AssetImportTask->bAutomated)
+	if (bAutomatedImport)
 	{
-		bOverwriteAll = bReplaceAll = Params.AssetImportTask->bReplaceExisting;
-		bDontOverwriteAny = bDontReplaceAny = !Params.AssetImportTask->bReplaceExisting;
+		bOverwriteAll = bReplaceAll = bForceOverrideExisting;
+		bDontOverwriteAny = bDontReplaceAny = !bForceOverrideExisting;
 	}
 
 	TArray<UFactory*> UsedFactories;

@@ -281,6 +281,11 @@ namespace ObjectTools
 				// and if so, offer the user the option to reset the transaction buffer.
 				GEditor->Trans->DisableObjectSerialization();
 				bOutIsReferenced = IsReferenced(InObject, GARBAGE_COLLECTION_KEEPFLAGS, EInternalObjectFlags::GarbageCollectionKeepFlags, true, OutMemoryReferences);
+				if (!bOutIsReferenced)
+				{
+					UE_LOG(LogObjectTools, Warning, TEXT("Detected inconsistencies between reference gathering algorithms. Switching 'Editor.UseLegacyGetReferencersForDeletion' on for the remainder of this editor session."));
+					CVarUseLegacyGetReferencersForDeletion->Set(1);
+				}
 				GEditor->Trans->EnableObjectSerialization();
 			}
 		}
@@ -311,6 +316,27 @@ namespace ObjectTools
 		OutObjectsAndSubObjects = InObjects;
 		if (InObjects.Num() > 0)
 		{
+			TArray<UObject*> AdditionalObjectsToExclude;
+			for (UObject* ObjectToExclude : ObjectsToExclude)
+			{
+				if (UBlueprint* BlueprintObject = Cast<UBlueprint>(ObjectToExclude))
+				{
+					TArray<UObject*> ClassSubObjects;
+					GetObjectsWithOuter(BlueprintObject->GeneratedClass, ClassSubObjects, false);
+					for (UObject* ClassSubObject : ClassSubObjects)
+					{
+						if (ClassSubObject->HasAnyFlags(RF_ArchetypeObject))
+						{
+							AdditionalObjectsToExclude.Add(ClassSubObject);
+						}
+					}
+				}
+			}
+			for (UObject* AdditionalObjectToExclude : AdditionalObjectsToExclude)
+			{
+				ObjectsToExclude.Add(AdditionalObjectToExclude);
+			}
+
 			for (UObject* InObject : InObjects)
 			{
 				TArray<UObject*> AdditionalObjects;
@@ -1036,12 +1062,25 @@ namespace ObjectTools
 		{
 			for (UObject* CurObject : ObjectsToReplaceWithin)
 			{
-				UBlueprint* BPObjectToUpdate = Cast<UBlueprint>(CurObject);
-				if (BPObjectToUpdate)
+				if (CurObject && CurObject->IsValidLowLevel())
 				{
-					FArchiveReplaceObjectRef<UObject> ReplaceAr(BPObjectToUpdate->GeneratedClass->ClassDefaultObject, ReplacementMap, false, true, false);
+					UBlueprint* BPObjectToUpdate = Cast<UBlueprint>(CurObject);
+					if (BPObjectToUpdate)
+					{
+						const bool bNullPrivateRefs = false;
+						const bool bIgnoreOuterRef = false;
+						const bool bIgnoreArchetypeRef = false;
+						const bool bDelayStart = false;
+						const bool bIgnoreClassGeneratedByRef = false;
+						FArchiveReplaceObjectRef<UObject> ReplaceAr(BPObjectToUpdate->GeneratedClass->ClassDefaultObject, ReplacementMap, bNullPrivateRefs, bIgnoreOuterRef, bIgnoreArchetypeRef, bDelayStart, bIgnoreClassGeneratedByRef);
+					}
+					const bool bNullPrivateRefs = false;
+					const bool bIgnoreOuterRef = false;
+					const bool bIgnoreArchetypeRef = false;
+					const bool bDelayStart = false;
+					const bool bIgnoreClassGeneratedByRef = false;
+					FArchiveReplaceObjectRef<UObject> ReplaceAr(CurObject, ReplacementMap, bNullPrivateRefs, bIgnoreOuterRef, bIgnoreArchetypeRef, bDelayStart, bIgnoreClassGeneratedByRef);
 				}
-				FArchiveReplaceObjectRef<UObject> ReplaceAr(CurObject, ReplacementMap, false, true, false);
 			}
 		}
 		else
@@ -1054,8 +1093,12 @@ namespace ObjectTools
 				GWarn->StatusUpdate( NumObjsReplaced, ReferencingPropertiesMapKeys.Num(), NSLOCTEXT("UnrealEd", "ConsolidateAssetsUpdate_ReplacingReferences", "Replacing Asset References...") );
 
 				UObject* CurReplaceObj = ReferencingPropertiesMapKeys[Index];
-
-				FArchiveReplaceObjectRef<UObject> ReplaceAr( CurReplaceObj, ReplacementMap, false, true, false );
+				const bool bNullPrivateRefs = false;
+				const bool bIgnoreOuterRef = false;
+				const bool bIgnoreArchetypeRef = false;
+				const bool bDelayStart = false;
+				const bool bIgnoreClassGeneratedByRef = false;
+				FArchiveReplaceObjectRef<UObject> ReplaceAr( CurReplaceObj, ReplacementMap, bNullPrivateRefs, bIgnoreOuterRef, bIgnoreArchetypeRef, bDelayStart, bIgnoreClassGeneratedByRef);
 			}
 		}
 		// Now alter the referencing objects the change has completed via PostEditChange,
@@ -1352,8 +1395,14 @@ namespace ObjectTools
 						UClass* OldClass = BlueprintToConsolidate->GeneratedClass;
 						UClass* OldSkeletonClass = BlueprintToConsolidate->SkeletonGeneratedClass;
 
+						FReplaceInstancesOfClassParameters ReplaceInstanceParams = FReplaceInstancesOfClassParameters(OldClass, BlueprintToConsolidateTo->GeneratedClass);
+						ReplaceInstanceParams.OriginalCDO = nullptr;
+						ReplaceInstanceParams.ObjectsThatShouldUseOldStuff = &ObjectsToNotConsolidateWithin;
+						ReplaceInstanceParams.bClassObjectReplaced = true;
+						ReplaceInstanceParams.bPreserveRootComponent = true;
+						ReplaceInstanceParams.InstancesThatShouldUseOldClass = &ObjectsToNotConsolidateWithin;
 
-						FBlueprintCompileReinstancer::ReplaceInstancesOfClass(OldClass, BlueprintToConsolidateTo->GeneratedClass, nullptr, &ObjectsToNotConsolidateWithin, true);
+						FBlueprintCompileReinstancer::ReplaceInstancesOfClassEx(ReplaceInstanceParams);
 						BlueprintToConsolidate->GeneratedClass = OldClass;
 						BlueprintToConsolidate->SkeletonGeneratedClass = OldSkeletonClass;
 					}

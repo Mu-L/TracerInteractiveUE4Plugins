@@ -12,6 +12,7 @@
 #include "Animation/AnimSequence.h"
 #include "ControlRig/Private/Units/Execution/RigUnit_InverseExecution.h"
 #include "Misc/ScopedSlowTask.h"
+#include "MovieSceneTimeHelpers.h"
 
 #define LOCTEXT_NAMESPACE "MovieSceneControlParameterRigSection"
 
@@ -2078,8 +2079,9 @@ bool UMovieSceneControlRigParameterSection::LoadAnimSequenceIntoThisSection(UAni
 	FFrameRate TickResolution = MovieScene->GetTickResolution();
 	float Length = AnimSequence->GetPlayLength();
 	float FrameRate = AnimSequence->GetFrameRate();
-	FFrameNumber EndFrame = TickResolution.AsFrameNumber(Length);
-	FFrameNumber StartFrame(0);
+
+	FFrameNumber StartFrame = UE::MovieScene::DiscreteInclusiveLower(MovieScene->GetPlaybackRange());
+	FFrameNumber EndFrame = TickResolution.AsFrameNumber(Length) + StartFrame;
 
 	Modify();
 	if (HasStartFrame() && HasEndFrame())
@@ -2088,7 +2090,6 @@ bool UMovieSceneControlRigParameterSection::LoadAnimSequenceIntoThisSection(UAni
 		EndFrame = StartFrame + EndFrame;
 		SetEndFrame(EndFrame);
 	}
-
 
 	int32 NumFrames = Length * FrameRate;
 	NumFrames = AnimSequence->GetNumberOfFrames();
@@ -2122,8 +2123,13 @@ bool UMovieSceneControlRigParameterSection::LoadAnimSequenceIntoThisSection(UAni
 				SourceBones.SetLocalTransform(BoneName, BoneTransform);
 			}
 		}
-
+		if (Index == 0)
+		{
+			//to make sure the first frame looks good we need to do this first. UE-100069
+			ControlRig->Execute(EControlRigState::Update, FRigUnit_InverseExecution::EventName);
+		}
 		ControlRig->Execute(EControlRigState::Update, FRigUnit_InverseExecution::EventName);
+
 		RecordControlRigKey(FrameNumber, true, bKeyReduce);
 		Progress.EnterProgressFrame(1);
 		if (Progress.ShouldCancel())

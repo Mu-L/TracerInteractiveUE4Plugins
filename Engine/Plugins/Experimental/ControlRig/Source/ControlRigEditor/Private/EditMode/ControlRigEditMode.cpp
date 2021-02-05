@@ -251,27 +251,36 @@ void FControlRigEditMode::SetObjects_Internal()
 		DelegateHelper->AddDelegates(MeshComponent);
 	}
 
-	if (UControlRig* RuntimeControlRig = GetControlRig(false))
+	UControlRig* RuntimeControlRig = GetControlRig(false);
+	
+	UControlRig* InteractionControlRig = GetControlRig(true);
+
+	if (UsesToolkits() && Toolkit.IsValid())
 	{
-		UControlRig* InteractionControlRig = GetControlRig(true);
+		StaticCastSharedPtr<SControlRigEditModeTools>(Toolkit->GetInlineContent())->SetControlRig(RuntimeControlRig);
+	}
 
-		if (UsesToolkits() && Toolkit.IsValid())
-		{
-			StaticCastSharedPtr<SControlRigEditModeTools>(Toolkit->GetInlineContent())->SetControlRig(RuntimeControlRig);
-		}
-
+	if (InteractionControlRig)
+	{
 		InteractionControlRig->Hierarchy.OnElementSelected.RemoveAll(this);
 		InteractionControlRig->ControlModified().RemoveAll(this);
-
+			
 		InteractionControlRig->Hierarchy.OnElementSelected.AddSP(this, &FControlRigEditMode::OnRigElementSelected);
 		InteractionControlRig->ControlModified().AddSP(this, &FControlRigEditMode::OnControlModified);
+	}
 
+	if (!RuntimeControlRig)
+	{
+		DestroyGizmosActors();
+	}
+	else
+	{
 		// create default manipulation layer
 		RecreateGizmoActors();
 		HandleSelectionChanged();
 	}
-	SetUpDetailPanel();
 
+	SetUpDetailPanel();
 }
 
 bool FControlRigEditMode::UsesToolkits() const
@@ -618,8 +627,6 @@ void FControlRigEditMode::Render(const FSceneView* View, FViewport* Viewport, FP
 			}
 		}
 	}
-
-	GetControlRig(true)->DrawInterface.Reset();
 }
 
 bool FControlRigEditMode::InputKey(FEditorViewportClient* InViewportClient, FViewport* InViewport, FKey InKey, EInputEvent InEvent)
@@ -1574,7 +1581,7 @@ void FControlRigEditMode::ResetTransforms(bool bSelectionOnly)
 			if (ControlToReset.Type == ERigElementType::Control)
 			{
 				FRigControl* Control = ControlRig->FindControl(ControlToReset.Name);
-				if (Control)
+				if (Control && !Control->bIsTransientControl)
 				{
 					FTransform Transform = ControlRig->GetControlHierarchy().GetLocalTransform(ControlToReset.Name, ERigControlValueType::Initial);
 					ControlRig->Modify();
@@ -1618,6 +1625,15 @@ bool FControlRigEditMode::MouseLeave(FEditorViewportClient* ViewportClient, FVie
 	}
 
 	return false;
+}
+
+void FControlRigEditMode::PostUndo()
+{
+	UControlRig* RuntimeControlRig = GetControlRig(false);
+	if (!RuntimeControlRig)
+	{
+		DestroyGizmosActors();
+	}
 }
 
 void FControlRigEditMode::RecreateGizmoActors(const TArray<FRigElementKey>& InSelectedElements)

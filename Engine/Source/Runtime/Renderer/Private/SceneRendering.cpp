@@ -1105,6 +1105,8 @@ FIntPoint FViewInfo::GetSecondaryViewRectSize() const
 		FMath::CeilToInt(UnscaledViewRect.Height() * Family->SecondaryViewFraction));
 }
 
+void UpdateHairLUT(const FViewInfo& View);
+
 /** Creates the view's uniform buffers given a set of view transforms. */
 void FViewInfo::SetupUniformBufferParameters(
 	FSceneRenderTargets& SceneContext,
@@ -1749,6 +1751,7 @@ void FViewInfo::SetupUniformBufferParameters(
 
 	// Hair global resources 
 	SetUpViewHairRenderInfo(*this, ViewUniformShaderParameters.HairRenderInfo, ViewUniformShaderParameters.HairRenderInfoBits, ViewUniformShaderParameters.HairComponents);
+	UpdateHairLUT(*this);
 	ViewUniformShaderParameters.HairScatteringLUTTexture = nullptr;
 	if (GSystemTextures.HairLUT0.IsValid() && GSystemTextures.HairLUT0->GetRenderTargetItem().ShaderResourceTexture)
 	{
@@ -2687,6 +2690,11 @@ void FSceneRenderer::ComputeFamilySize()
 		}
 	}
 
+	for (FViewInfo& View : Views)
+	{
+		View.InstancedStereoWidth = InstancedStereoWidth;
+	}
+
 	// We render to the actual position of the viewports so with black borders we need the max.
 	// We could change it by rendering all to left top but that has implications for splitscreen. 
 	FamilySize.X = FMath::TruncToInt(MaxFamilyX);
@@ -3029,7 +3037,7 @@ void FSceneRenderer::RenderFinish(FRDGBuilder& GraphBuilder, FRDGTextureRef View
 	// clear the commands
 	bHasRequestedToggleFreeze = false;
 
-	if(ViewFamily.EngineShowFlags.OnScreenDebug)
+	if(ViewFamily.EngineShowFlags.OnScreenDebug && ViewFamilyTexture)
 	{
 		for(int32 ViewIndex = 0;ViewIndex < Views.Num();ViewIndex++)
 		{
@@ -3179,6 +3187,7 @@ void FSceneRenderer::RenderCustomDepthPassAtLocation(FRDGBuilder& GraphBuilder, 
 }
 
 BEGIN_SHADER_PARAMETER_STRUCT(FCustomDepthPassParameters, )
+	SHADER_PARAMETER_RDG_UNIFORM_BUFFER(FMobileSceneTextureUniformParameters, MobileSceneTextures)
 	RENDER_TARGET_BINDING_SLOTS()
 END_SHADER_PARAMETER_STRUCT()
 
@@ -3212,6 +3221,10 @@ void FSceneRenderer::RenderCustomDepthPass(FRDGBuilder& GraphBuilder)
 	{
 		RDG_GPU_STAT_SCOPE(GraphBuilder, CustomDepth);
 
+		// Only clear once the target for every views it contains.
+		ERenderTargetLoadAction DepthLoadAction = ERenderTargetLoadAction::EClear;
+		ERenderTargetLoadAction StencilLoadAction = bWritesCustomStencilValues ? ERenderTargetLoadAction::EClear : ERenderTargetLoadAction::ENoAction;
+
 		for (int32 ViewIndex = 0; ViewIndex < Views.Num(); ViewIndex++)
 		{
 			RDG_EVENT_SCOPE_CONDITIONAL(GraphBuilder, Views.Num() > 1, "View%d", ViewIndex);
@@ -3225,23 +3238,29 @@ void FSceneRenderer::RenderCustomDepthPass(FRDGBuilder& GraphBuilder)
 				{
 					checkSlow(CustomDepthTextures.MobileCustomDepth && CustomDepthTextures.MobileCustomStencil);
 
-					PassParameters->RenderTargets[0] = FRenderTargetBinding(CustomDepthTextures.MobileCustomDepth, ERenderTargetLoadAction::EClear);
-					PassParameters->RenderTargets[1] = FRenderTargetBinding(CustomDepthTextures.MobileCustomStencil, bWritesCustomStencilValues ? ERenderTargetLoadAction::EClear : ERenderTargetLoadAction::ENoAction);
+					PassParameters->RenderTargets[0] = FRenderTargetBinding(CustomDepthTextures.MobileCustomDepth, DepthLoadAction);
+					PassParameters->RenderTargets[1] = FRenderTargetBinding(CustomDepthTextures.MobileCustomStencil, StencilLoadAction);
 
 					PassParameters->RenderTargets.DepthStencil = FDepthStencilBinding(
 						CustomDepthTextures.CustomDepth,
-						ERenderTargetLoadAction::EClear,
-						ERenderTargetLoadAction::EClear,
+						DepthLoadAction,
+						StencilLoadAction,
 						FExclusiveDepthStencil::DepthWrite_StencilWrite);
+
+					PassParameters->MobileSceneTextures = CreateMobileSceneTextureUniformBuffer(GraphBuilder, EMobileSceneTextureSetupMode::None);
 				}
 				else
 				{
 					PassParameters->RenderTargets.DepthStencil = FDepthStencilBinding(
 						CustomDepthTextures.CustomDepth,
-						ERenderTargetLoadAction::EClear,
-						bWritesCustomStencilValues ? ERenderTargetLoadAction::EClear : ERenderTargetLoadAction::ENoAction,
+						DepthLoadAction,
+						StencilLoadAction,
 						FExclusiveDepthStencil::DepthWrite_StencilWrite);
 				}
+
+				// Next pass, do not clear the shared target, only render into it
+				DepthLoadAction = ERenderTargetLoadAction::ELoad;
+				StencilLoadAction = ERenderTargetLoadAction::ELoad;
 
 				GraphBuilder.AddPass(
 					RDG_EVENT_NAME("CustomDepth"),
@@ -4323,7 +4342,13 @@ void AddResolveSceneColorPass(FRDGBuilder& GraphBuilder, const FViewInfo& View, 
 
 	if (!GAllowCustomMSAAResolves)
 	{
-		AddCopyToResolveTargetPass(GraphBuilder, SceneColor.Target, SceneColor.Resolve, FResolveRect(View.ViewRect));
+		FResolveRect ResolveRect(View.ViewRect);
+		if (View.IsInstancedStereoPass())
+		{
+			ResolveRect.X1 = 0;
+			ResolveRect.X2 = View.InstancedStereoWidth;
+		}
+		AddCopyToResolveTargetPass(GraphBuilder, SceneColor.Target, SceneColor.Resolve, ResolveRect);
 	}
 	else
 	{
@@ -4368,7 +4393,8 @@ void AddResolveSceneColorPass(FRDGBuilder& GraphBuilder, const FViewInfo& View, 
 
 			// Resolve views individually. In the case of adaptive resolution, the view family will be much larger than the views individually.
 			RHICmdList.SetViewport(0.0f, 0.0f, 0.0f, SceneColorExtent.X, SceneColorExtent.Y, 1.0f);
-			RHICmdList.SetScissorRect(true, View.ViewRect.Min.X, View.ViewRect.Min.Y, View.ViewRect.Max.X, View.ViewRect.Max.Y);
+			RHICmdList.SetScissorRect(true, View.IsInstancedStereoPass() ? 0 : View.ViewRect.Min.X, View.ViewRect.Min.Y,
+				View.IsInstancedStereoPass() ? View.InstancedStereoWidth : View.ViewRect.Max.X, View.ViewRect.Max.Y);
 
 			int32 ResolveWidth = CVarWideCustomResolve.GetValueOnRenderThread();
 
@@ -4467,7 +4493,10 @@ void AddResolveSceneColorPass(FRDGBuilder& GraphBuilder, TArrayView<const FViewI
 	for (int32 ViewIndex = 0; ViewIndex < Views.Num(); ViewIndex++)
 	{
 		const FViewInfo& View = Views[ViewIndex];
-		AddResolveSceneColorPass(GraphBuilder, View, SceneColor);
+		if (View.ShouldRenderView())
+		{
+			AddResolveSceneColorPass(GraphBuilder, View, SceneColor);
+		}
 	}
 }
 
@@ -4497,7 +4526,12 @@ void AddResolveSceneDepthPass(FRDGBuilder& GraphBuilder, const FViewInfo& View, 
 		return;
 	}
 
-	const FResolveRect ResolveRect(View.ViewRect);
+	FResolveRect ResolveRect(View.ViewRect);
+	if (View.IsInstancedStereoPass())
+	{
+		ResolveRect.X1 = 0;
+		ResolveRect.X2 = View.InstancedStereoWidth;
+	}
 
 	if (!GAllowCustomMSAAResolves)
 	{
@@ -4580,7 +4614,11 @@ void AddResolveSceneDepthPass(FRDGBuilder& GraphBuilder, TArrayView<const FViewI
 {
 	for (int32 ViewIndex = 0; ViewIndex < Views.Num(); ViewIndex++)
 	{
-		AddResolveSceneDepthPass(GraphBuilder, Views[ViewIndex], SceneDepth);
+		const FViewInfo& View = Views[ViewIndex];
+		if (View.ShouldRenderView())
+		{
+			AddResolveSceneDepthPass(GraphBuilder, View, SceneDepth);
+		}
 	}
 }
 

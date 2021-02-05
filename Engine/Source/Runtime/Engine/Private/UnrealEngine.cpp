@@ -1352,7 +1352,7 @@ void UEngine::ConditionalCollectGarbage()
 #if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
 		if (CVarStressTestGCWhileStreaming.GetValueOnGameThread() && IsAsyncLoading())
 		{
-			TryCollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS, true);
+			CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS, true);
 		}
 		else if (CVarForceCollectGarbageEveryFrame.GetValueOnGameThread())
 		{
@@ -10858,7 +10858,8 @@ FScopedConditionalWorldSwitcher::FScopedConditionalWorldSwitcher(UWorld* InWorld
 
 void FScopedConditionalWorldSwitcher::ConditionalSwitchWorld( FViewportClient* InViewportClient, UWorld* InWorld )
 {
-	if( GIsEditor )
+	// If we don't have a currently active world, we can't safely switch worlds because it won't get restored so do nothing
+	if( GIsEditor && GWorld )
 	{
 		if ( InWorld && InWorld->WorldType == EWorldType::PIE && !GIsPlayInEditorWorld )
 		{

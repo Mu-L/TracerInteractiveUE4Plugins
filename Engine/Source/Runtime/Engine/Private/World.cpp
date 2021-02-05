@@ -4534,7 +4534,6 @@ void UWorld::CleanupWorldInternal(bool bSessionEnded, bool bCleanupResources, UW
 		Scene->SetFXSystem(NULL);
 		FXSystem = NULL;
 	}
-
 }
 
 UGameViewportClient* UWorld::GetGameViewport() const
@@ -4793,7 +4792,11 @@ void UWorld::CreatePhysicsScene(const AWorldSettings* Settings)
 	const FName PhysicsName = IsNetMode(NM_DedicatedServer) ? TEXT("ServerPhysics") : TEXT("ClientPhysics");
 	FPhysScene* NewScene = new FPhysScene(nullptr, PhysicsName);
 #else
+#if PHYSICS_INTERFACE_PHYSX
+	FPhysScene* NewScene = new FPhysScene(Settings);
+#else
 	FPhysScene* NewScene = new FPhysScene(nullptr);
+#endif
 #endif
 	SetPhysicsScene(NewScene);
 }
@@ -6264,10 +6267,10 @@ UWorld* FSeamlessTravelHandler::Tick()
 			// abort
 			CancelTravel();			
 		}
-		else if ( LoadedWorld->PersistentLevel == nullptr)
+		else if ( LoadedWorld == nullptr || LoadedWorld->PersistentLevel == nullptr)
 		{
 			// Package isn't a level
-			FString Error = FString::Printf(TEXT("Unable to travel to '%s' - package is not a level"), *LoadedPackage->GetName());
+			FString Error = FString::Printf(TEXT("Unable to travel to '%s' - package is not a level"), LoadedPackage ? *LoadedPackage->GetName() : *LoadedWorld->GetName());
 			UE_LOG(LogWorld, Error, TEXT("%s"), *Error);
 			// abort
 			CancelTravel();

@@ -459,6 +459,19 @@ void UNiagaraSystem::PostLoad()
 {
 	Super::PostLoad();
 
+	// Workaround for UE-104235 where a CDO loads a NiagaraSystem before the NiagaraModule has had a chance to load
+	// We force the module to load here we makes sure the type registry, etc, is all setup in time.
+	static bool bLoadChecked = false;
+	if ( !bLoadChecked )
+	{
+		// We don't implement IsPostLoadThreadSafe so should be on the GT, but let's not assume.
+		if ( ensure(IsInGameThread()) )
+		{
+			bLoadChecked = true;
+			FModuleManager::LoadModuleChecked<INiagaraModule>("Niagara");
+		}
+	}
+
 	ExposedParameters.PostLoad();
 	ExposedParameters.SanityCheckData();
 

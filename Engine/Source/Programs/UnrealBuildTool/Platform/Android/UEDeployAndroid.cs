@@ -55,6 +55,12 @@ namespace UnrealBuildTool
 		/// </summary>
 		protected bool bPackageDataInsideApk = false;
 
+		/// <summary>
+		/// Ignore AppBundle (AAB) generation setting if "-ForceAPKGeneration" specified
+		/// </summary>
+		[CommandLine("-ForceAPKGeneration", Value = "true")]
+		public bool ForceAPKGeneration = false;
+
 		public UEDeployAndroid(FileReference InProjectFile, bool InForcePackageData)
 		{
 			ProjectFile = InProjectFile;
@@ -62,6 +68,8 @@ namespace UnrealBuildTool
 			// read the ini value and OR with the command line value
 			bool IniValue = ReadPackageDataInsideApkFromIni(null);
 			bPackageDataInsideApk = InForcePackageData || IniValue == true;
+
+			CommandLine.ParseArguments(Environment.GetCommandLineArgs(), this);
 		}
 
 		private UnrealPluginLanguage UPL = null;
@@ -1287,10 +1295,12 @@ namespace UnrealBuildTool
 		void CopyVulkanValidationLayers(string UE4BuildPath, string UE4Arch, string NDKArch, string Configuration)
 		{
 			bool bSupportsVulkan = false;
+			bool bSupportsVulkanSM5 = false;
 			ConfigHierarchy Ini = GetConfigCacheIni(ConfigHierarchyType.Engine);
 			Ini.GetBool("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "bSupportsVulkan", out bSupportsVulkan);
+			Ini.GetBool("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "bSupportsVulkanSM5", out bSupportsVulkanSM5);
 
-			bool bCopyVulkanLayers = bSupportsVulkan && (Configuration == "Debug" || Configuration == "Development");
+			bool bCopyVulkanLayers = (bSupportsVulkan || bSupportsVulkanSM5) && (Configuration == "Debug" || Configuration == "Development");
 			if (bCopyVulkanLayers)
 			{
 				string VulkanLayersDir = Environment.ExpandEnvironmentVariables("%NDKROOT%/sources/third_party/vulkan/src/build-android/jniLibs/") + NDKArch;
@@ -1558,6 +1568,30 @@ namespace UnrealBuildTool
 			foreach (string GPUArch in GPUArchitectures)
 			{
 				CurrentSettings.AppendFormat("GPUArch={0}{1}", GPUArch, Environment.NewLine);
+			}
+
+			// Modifying some settings in the GameMapsSettings could trigger the OBB regeneration
+			// and make the cached OBBData.java mismatch to the actually data. 
+			// So we insert the relevant keys into CurrentSettings to capture the change, to
+			// enforce the refreshing of Android java codes
+			Section = Ini.FindSection("/Script/EngineSettings.GameMapsSettings");
+			if (Section != null)
+			{
+				foreach (string Key in Section.KeyNames)
+				{
+					if (!Key.Equals("GameDefaultMap") && 
+						!Key.Equals("GlobalDefaultGameMode"))
+					{
+						continue;
+					}
+
+					IReadOnlyList<string> Values;
+					Section.TryGetValues(Key, out Values);
+					foreach (string Value in Values)
+					{
+						CurrentSettings.AppendLine(string.Format("{0}={1}", Key, Value));
+					}
+				}
 			}
 
 			return CurrentSettings.ToString();
@@ -2086,6 +2120,9 @@ namespace UnrealBuildTool
 				Log.TraceInformation("Daydream and IMU both enabled, recommend disabling IMU if not needed.");
 			}
 
+			bool bExtractNativeLibs = true;
+			Ini.GetBool("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "bExtractNativeLibs", out bExtractNativeLibs);
+
 			bool bPublicLogFiles = true;
 			Ini.GetBool("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "bPublicLogFiles", out bPublicLogFiles);
 			if (!bUseExternalFilesDir)
@@ -2228,6 +2265,7 @@ namespace UnrealBuildTool
 				}
 			}
 			Text.AppendLine("\t             android:hardwareAccelerated=\"true\"");
+			Text.AppendLine(string.Format("\t             android:extractNativeLibs=\"{0}\"", bExtractNativeLibs ? "true" : "false"));
 			Text.AppendLine("\t				android:name=\"com.epicgames.ue4.GameApplication\"");
 			if (!bIsForDistribution && SDKLevelInt >= 29 && !bRequestedLegacyExternalStorage)
 			{
@@ -2836,6 +2874,10 @@ namespace UnrealBuildTool
 		}
 		private bool BundleEnabled()
 		{
+			if (ForceAPKGeneration)
+			{
+				return false;
+			}
 			ConfigHierarchy Ini = GetConfigCacheIni(ConfigHierarchyType.Engine);
 			bool bEnableBundle = false;
 			Ini.GetBool("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "bEnableBundle", out bEnableBundle);
@@ -3001,7 +3043,7 @@ namespace UnrealBuildTool
 			Ini.GetBool("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "bBundleDensitySplit", out bBundleDensitySplit);
 
 			GradleBuildAdditionsContent.AppendLine("android {");
-			if (bEnableBundle)
+			if (!ForceAPKGeneration && bEnableBundle)
 			{
 				GradleBuildAdditionsContent.AppendLine("\tbundle {");
 				GradleBuildAdditionsContent.AppendLine("\t\tabi { enableSplit = " + (bBundleABISplit ? "true" : "false") + " }");

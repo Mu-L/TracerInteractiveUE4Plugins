@@ -83,7 +83,7 @@ UDisplayClusterConfigurationData* FDisplayClusterConfigurationTextParser::Conver
 			Comp->TrackerId      = CfgComp.TrackerId;
 			Comp->TrackerChannel = CfgComp.TrackerCh;
 			// Screen specific
-			Comp->Size = CfgComp.Size * 100;
+			Comp->Size = CfgComp.Size;
 
 			Config->Scene->Screens.Emplace(CfgComp.Id, Comp);
 		}
@@ -104,7 +104,7 @@ UDisplayClusterConfigurationData* FDisplayClusterConfigurationTextParser::Conver
 			Comp->TrackerId      = CfgComp.TrackerId;
 			Comp->TrackerChannel = CfgComp.TrackerCh;
 			// Camera specific
-			Comp->InterpupillaryDistance = CfgComp.EyeDist * 100.f;
+			Comp->InterpupillaryDistance = CfgComp.EyeDist;
 			Comp->bSwapEyes              = CfgComp.EyeSwap;
 			Comp->StereoOffset           = EyeOffset;
 
@@ -443,11 +443,11 @@ UDisplayClusterConfigurationData* FDisplayClusterConfigurationTextParser::Conver
 
 			FString StrMappingRight;
 			DisplayClusterHelpers::str::ExtractValue(CfgInputDevice.Params, DisplayClusterConfigurationTextStrings::cfg::data::input::Right, StrMappingRight);
-			ConvertMapping(StrMappingRight, InputDevice->Front);
+			ConvertMapping(StrMappingRight, InputDevice->Right);
 
 			FString StrMappingUp;
 			DisplayClusterHelpers::str::ExtractValue(CfgInputDevice.Params, DisplayClusterConfigurationTextStrings::cfg::data::input::Up, StrMappingUp);
-			ConvertMapping(StrMappingUp, InputDevice->Front);
+			ConvertMapping(StrMappingUp, InputDevice->Up);
 
 			Config->Input->TrackerDevices.Emplace(CfgInputDevice.Id, InputDevice);
 		}

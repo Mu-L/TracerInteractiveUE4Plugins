@@ -147,15 +147,21 @@ UControlRigBlueprint* FControlRigBlueprintActions::CreateControlRigFromSkeletalM
 
 	USkeletalMesh* SkeletalMesh = Cast<USkeletalMesh>(InSelectedObject);
 	USkeleton* Skeleton = Cast<USkeleton>(InSelectedObject);
+	const FReferenceSkeleton* RefSkeleton = nullptr;
 
 	if(SkeletalMesh)
 	{
 		Skeleton = SkeletalMesh->Skeleton;
+		RefSkeleton = &SkeletalMesh->RefSkeleton;
 	}
 	else if (Skeleton == nullptr)
 	{
 		UE_LOG(LogControlRigEditor, Error, TEXT("CreateControlRigFromSkeletalMeshOrSkeleton: Provided object has to be a SkeletalMesh or Skeleton."));
 		return nullptr;
+	}
+	else
+	{
+		RefSkeleton = &Skeleton->GetReferenceSkeleton();
 	}
 
 	FString PackagePath = InSelectedObject->GetPathName();
@@ -173,10 +179,11 @@ UControlRigBlueprint* FControlRigBlueprintActions::CreateControlRigFromSkeletalM
 		return nullptr;
 	}
 
-	NewControlRigBlueprint->HierarchyContainer.BoneHierarchy.ImportSkeleton(Skeleton->GetReferenceSkeleton(), NAME_None, true, true, false, false);
-	NewControlRigBlueprint->HierarchyContainer.CurveContainer.ImportCurvesFromSkeleton(Skeleton, NAME_None, true, false, false);
+	NewControlRigBlueprint->HierarchyContainer.BoneHierarchy.ImportSkeleton(*RefSkeleton, NAME_None, false, false, false, false);
+	NewControlRigBlueprint->HierarchyContainer.CurveContainer.ImportCurvesFromSkeleton(Skeleton, NAME_None, false, false, false);
 	NewControlRigBlueprint->SourceHierarchyImport = Skeleton;
 	NewControlRigBlueprint->SourceCurveImport = Skeleton;
+	NewControlRigBlueprint->PropagateHierarchyFromBPToInstances(true);
 
 	if(SkeletalMesh)
 	{
@@ -304,6 +311,15 @@ void FControlRigBlueprintActions::OnSpawnedSkeletalMeshActorChanged(UObject* InO
 		TArray<FGuid> ActorTracks = WeakSequencer.Pin()->AddActors(ActorsToAdd, false);
 		for (FGuid ActorTrackGuid : ActorTracks)
 		{
+			//Delete binding from default animating rig
+			FGuid CompGuid = WeakSequencer.Pin()->FindObjectId(*(MeshActor->GetSkeletalMeshComponent()), WeakSequencer.Pin()->GetFocusedTemplateID());
+			if (CompGuid.IsValid())
+			{
+				if (!MovieScene->RemovePossessable(CompGuid))
+				{
+					MovieScene->RemoveSpawnable(CompGuid);
+				}
+			}
 			UMovieSceneControlRigParameterTrack* Track = MovieScene->AddTrack<UMovieSceneControlRigParameterTrack>(ActorTrackGuid);
 			if (Track)
 			{

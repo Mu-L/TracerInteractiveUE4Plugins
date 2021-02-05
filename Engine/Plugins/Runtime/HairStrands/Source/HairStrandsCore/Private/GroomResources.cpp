@@ -143,8 +143,6 @@ void InternalCreateVertexBufferRDG(FRDGBuilder& GraphBuilder, const TArray<DataT
 template<typename FormatType>
 void InternalCreateVertexBufferRDG(FRDGBuilder& GraphBuilder, uint32 InVertexCount, FRDGExternalBuffer& Out, const TCHAR* DebugName)
 {
-	FRDGBufferRef Buffer = nullptr;
-
 	const uint32 DataCount = InVertexCount;
 	const uint32 DataSizeInBytes = FormatType::SizeInByte * DataCount;
 	if (DataSizeInBytes == 0)
@@ -153,18 +151,42 @@ void InternalCreateVertexBufferRDG(FRDGBuilder& GraphBuilder, uint32 InVertexCou
 		return;
 	}
 
-	// #hair_todo: Create this with a create+clear pass instead?
 	const FRDGBufferDesc Desc = FRDGBufferDesc::CreateBufferDesc(FormatType::SizeInByte, InVertexCount);
-	TArray<uint8> InitializeData;
-	InitializeData.Init(0u, DataSizeInBytes);
-	Buffer = CreateVertexBuffer(
-		GraphBuilder,
-		DebugName,
-		Desc,
-		InitializeData.GetData(),
-		DataSizeInBytes,
-		ERDGInitialDataFlags::None);
+	FRDGBufferRef Buffer = GraphBuilder.CreateBuffer(Desc, DebugName, ERDGBufferFlags::MultiFrame);
 
+	auto IsFloatFormat = []()
+	{
+		switch (FormatType::Format)
+		{
+		case PF_A32B32G32R32F:
+		case PF_FloatR11G11B10:
+		case PF_FloatRGB:
+		case PF_FloatRGBA:
+		case PF_G16R16F_FILTER:
+		case PF_G16R16F:
+		case PF_G32R32F:
+		case PF_R16F_FILTER:
+		case PF_R16F:
+		case PF_R16G16B16A16_SNORM:
+		case PF_R16G16B16A16_UNORM:
+		case PF_R32_FLOAT:
+		case PF_R5G6B5_UNORM:
+		case PF_R8G8B8A8_SNORM:
+			return true;
+		default:
+			return false;
+		}
+	};
+
+	if (IsFloatFormat())
+	{
+		AddClearUAVFloatPass(GraphBuilder, GraphBuilder.CreateUAV(Buffer, FormatType::Format), 0.0f);
+	}
+	else
+	{
+		AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(Buffer, FormatType::Format), 0u);
+	}
+	
 	ConvertToExternalBufferWithViews(GraphBuilder, Buffer, Out, FormatType::Format);
 }
 
@@ -232,6 +254,24 @@ static UTexture2D* CreateCardTexture(FIntPoint Resolution)
 	Out->UpdateResource();
 
 	return Out;
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////
+void CreateHairStrandsDebugAttributeBuffer(FRDGExternalBuffer* DebugAttributeBuffer, uint32 VertexCount)
+{
+	if (VertexCount == 0 || !DebugAttributeBuffer)
+		return;
+
+	FRDGExternalBuffer* LocalAttributeBuffer = DebugAttributeBuffer;
+	ENQUEUE_RENDER_COMMAND(FHairStrandsCreateDebugAttributeBuffer)(
+	[LocalAttributeBuffer, VertexCount](FRHICommandListImmediate& RHICmdList)
+	{
+		if (GUsingNullRHI) { return; }
+		FMemMark Mark(FMemStack::Get());
+		FRDGBuilder GraphBuilder(RHICmdList);
+		InternalCreateVertexBufferRDG<FHairStrandsAttributeFormat>(GraphBuilder, VertexCount, *LocalAttributeBuffer, TEXT("HairStrands_DebugAttributeBuffer"));
+		GraphBuilder.Execute();
+	});
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////

@@ -584,6 +584,11 @@ void FOpenXRInputPlugin::FOpenXRInput::SendControllerEvents()
 		return;
 	}
 
+	if (OpenXRHMD == nullptr)
+	{
+		return;
+	}
+
 	XrSession Session = OpenXRHMD->GetSession();
 
 	for (XrPath Subaction : SubactionPaths)
@@ -713,6 +718,11 @@ FName FOpenXRInputPlugin::FOpenXRInput::GetMotionControllerDeviceTypeName() cons
 
 bool FOpenXRInputPlugin::FOpenXRInput::GetControllerOrientationAndPosition(const int32 ControllerIndex, const FName MotionSource, FRotator& OutOrientation, FVector& OutPosition, float WorldToMetersScale) const
 {
+	if (OpenXRHMD == nullptr)
+	{
+		return false;
+	}
+
 	if (ControllerIndex == 0 && IsOpenXRInputSupportedMotionSource(MotionSource))
 	{
 		if (MotionSource == OpenXRSourceNames::AnyHand)
@@ -764,6 +774,11 @@ bool FOpenXRInputPlugin::FOpenXRInput::GetControllerOrientationAndPositionForTim
 {
 	OutTimeWasUsed = true;
 
+	if (OpenXRHMD == nullptr)
+	{
+		return false;
+	}
+
 	if (ControllerIndex == 0 && IsOpenXRInputSupportedMotionSource(MotionSource))
 	{
 		if (MotionSource == OpenXRSourceNames::AnyHand)
@@ -813,6 +828,11 @@ bool FOpenXRInputPlugin::FOpenXRInput::GetControllerOrientationAndPositionForTim
 
 ETrackingStatus FOpenXRInputPlugin::FOpenXRInput::GetControllerTrackingStatus(const int32 ControllerIndex, const FName MotionSource) const
 {
+	if (OpenXRHMD == nullptr)
+	{
+		return ETrackingStatus::NotTracked;
+	}
+
 	if (ControllerIndex == 0 && IsOpenXRInputSupportedMotionSource(MotionSource))
 	{
 		if (MotionSource == OpenXRSourceNames::AnyHand)
@@ -881,7 +901,17 @@ void FOpenXRInputPlugin::FOpenXRInput::EnumerateSources(TArray<FMotionController
 // TODO: Refactor API to change the Hand type to EControllerHand
 void FOpenXRInputPlugin::FOpenXRInput::SetHapticFeedbackValues(int32 ControllerId, int32 Hand, const FHapticFeedbackValues& Values)
 {
+	if (OpenXRHMD == nullptr)
+	{
+		return;
+	}
+
 	XrSession Session = OpenXRHMD->GetSession();
+
+	if (Session == XR_NULL_HANDLE)
+	{
+		return;
+	}
 
 	XrHapticVibration HapticValue;
 	HapticValue.type = XR_TYPE_HAPTIC_VIBRATION;
@@ -892,7 +922,7 @@ void FOpenXRInputPlugin::FOpenXRInput::SetHapticFeedbackValues(int32 ControllerI
 
 	if (ControllerId == 0)
 	{
-		if (Hand == (int32)EControllerHand::Left || Hand == (int32)EControllerHand::AnyHand)
+		if ((Hand == (int32)EControllerHand::Left || Hand == (int32)EControllerHand::AnyHand) && Controllers.Contains(EControllerHand::Left))
 		{
 			XrHapticActionInfo HapticActionInfo;
 			HapticActionInfo.type = XR_TYPE_HAPTIC_ACTION_INFO;
@@ -908,7 +938,7 @@ void FOpenXRInputPlugin::FOpenXRInput::SetHapticFeedbackValues(int32 ControllerI
 				XR_ENSURE(xrApplyHapticFeedback(Session, &HapticActionInfo, (const XrHapticBaseHeader*)&HapticValue));
 			}
 		}
-		if (Hand == (int32)EControllerHand::Right || Hand == (int32)EControllerHand::AnyHand)
+		if ((Hand == (int32)EControllerHand::Right || Hand == (int32)EControllerHand::AnyHand) && Controllers.Contains(EControllerHand::Right))
 		{
 			XrHapticActionInfo HapticActionInfo;
 			HapticActionInfo.type = XR_TYPE_HAPTIC_ACTION_INFO;

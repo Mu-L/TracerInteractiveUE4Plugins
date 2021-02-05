@@ -56,6 +56,10 @@ namespace UnrealBuildTool
 		static int ClangVersionMinor = -1;
 		static int ClangVersionPatch = -1;
 
+		// Version string from the Android specific build of clang. E.g in Android (6317467 based on r365631c1) clang version 9.0.8
+		// this would be 6317467)
+		protected static string AndroidClangBuild;
+
 		// the list of architectures we will compile for
 		protected List<string> Arches = null;
 		// the list of GPU architectures we will compile for
@@ -302,6 +306,19 @@ namespace UnrealBuildTool
 
 			// set up the path to our toolchains
 			ClangPath = Utils.CollapseRelativeDirectories(Path.Combine(NDKPath, @"toolchains/llvm", ArchitecturePath, @"bin/clang++" + ExeExtension));
+
+			// Android (6317467 based on r365631c1) clang version 9.0.8 
+			AndroidClangBuild = Utils.RunLocalProcessAndReturnStdOut(ClangPath, "--version");			
+			try
+			{
+				AndroidClangBuild = Regex.Match(AndroidClangBuild, @"(\w+) based on").Groups[1].ToString();
+			}
+			catch
+			{
+				Log.TraceWarning("Failed to retreive build version from {0}", AndroidClangBuild);
+				AndroidClangBuild = "unknown";
+			}
+
 			if (NDKDefineInt < 210000 || ForceLDLinker())
 			{
 				// use ld before r21
@@ -491,18 +508,60 @@ namespace UnrealBuildTool
 			return NDKVersionInt;
 		}
 
-		protected virtual bool ValidateNDK(string PlatformsDir, string ApiString)
+		static string CachedPlatformsFilename = "";
+		static bool CachedPlatformsValid = false;
+		static int CachedMinPlatform = -1;
+		static int CachedMaxPlatform = -1;
+
+		private bool ReadMinMaxPlatforms(string PlatformsFilename, out int MinPlatform, out int MaxPlatform)
 		{
-			if (!Directory.Exists(PlatformsDir))
+			if (!CachedPlatformsFilename.Equals(PlatformsFilename))
+			{
+				// reset cache to defaults
+				CachedPlatformsFilename = PlatformsFilename;
+				CachedPlatformsValid = false;
+				CachedMinPlatform = -1;
+				CachedMaxPlatform = -1;
+
+				// try to read it
+				try
+				{
+					JsonObject PlatformsObj = null;
+					if (JsonObject.TryRead(new FileReference(PlatformsFilename), out PlatformsObj))
+					{
+						CachedPlatformsValid = PlatformsObj.TryGetIntegerField("min", out CachedMinPlatform) && PlatformsObj.TryGetIntegerField("max", out CachedMaxPlatform);
+					}
+				}
+				catch (Exception)
+				{
+				}
+			}
+
+			MinPlatform = CachedMinPlatform;
+			MaxPlatform = CachedMaxPlatform;
+			return CachedPlatformsValid;
+		}
+
+		protected virtual bool ValidateNDK(string PlatformsFilename, string ApiString)
+		{
+			int MinPlatform, MaxPlatform;
+			if (!ReadMinMaxPlatforms(PlatformsFilename, out MinPlatform, out MaxPlatform))
 			{
 				return false;
 			}
 
-			string NDKPlatformDir = Path.Combine(PlatformsDir, ApiString);
-			return Directory.Exists(NDKPlatformDir);
+			if (ApiString.Contains("-"))
+			{
+				int Version;
+				if (int.TryParse(ApiString.Substring(ApiString.LastIndexOf('-') + 1), out Version))
+				{
+					return (Version >= MinPlatform && Version <= MaxPlatform);
+				}
+			}
+			return false;
 		}
 
-		public string GetNdkApiLevel()
+		public virtual string GetNdkApiLevel()
 		{
 			// ask the .ini system for what version to use
 			ConfigHierarchy Ini = ConfigCache.ReadHierarchy(ConfigHierarchyType.Engine, DirectoryReference.FromFile(ProjectFile), UnrealTargetPlatform.Android);
@@ -518,23 +577,27 @@ namespace UnrealBuildTool
 				NDKLevel = ProjectNDKLevel;
 			}
 
-			string PlatformsDir = Environment.ExpandEnvironmentVariables("%NDKROOT%/platforms");
+			string PlatformsFilename = Environment.ExpandEnvironmentVariables("%NDKROOT%/meta/platforms.json");
+			if (!File.Exists(PlatformsFilename))
+			{
+				throw new BuildException("No NDK platforms found in {0}", PlatformsFilename);
+			}
+
 			if (NDKLevel == "latest")
 			{
-				// get a list of NDK platforms
-				if (!Directory.Exists(PlatformsDir))
+				int MinPlatform, MaxPlatform;
+				if (!ReadMinMaxPlatforms(PlatformsFilename, out MinPlatform, out MaxPlatform))
 				{
-					throw new BuildException("No NDK platforms found in {0}", PlatformsDir);
+					throw new BuildException("No NDK platforms found in {0}", PlatformsFilename);
 				}
 
-				// return the largest of them
-				NDKLevel = GetLargestApiLevel(Directory.GetDirectories(PlatformsDir));
+				NDKLevel = "android-" + MaxPlatform.ToString();
 			}
 
 			// validate the platform NDK is installed
-			if (!ValidateNDK(PlatformsDir, NDKLevel))
+			if (!ValidateNDK(PlatformsFilename, NDKLevel))
 			{
-				throw new BuildException("The NDK API requested '{0}' not installed in {1}", NDKLevel, PlatformsDir);
+				throw new BuildException("The NDK API requested '{0}' not installed in {1}", NDKLevel, PlatformsFilename);
 			}
 
 			return NDKLevel;
@@ -1569,6 +1632,7 @@ namespace UnrealBuildTool
 							CompileAction.CommandArguments = ResponseArgument;
 						}
 						CompileAction.PrerequisiteItems.Add(ResponseFileItem);
+						CompileAction.CommandVersion = AndroidClangBuild;
 
 						if (GPUArchitecture.Length > 0)
 						{
@@ -1662,6 +1726,7 @@ namespace UnrealBuildTool
 						CompileAction.WorkingDirectory = UnrealBuildTool.EngineSourceDirectory;
 						CompileAction.CommandPath = new FileReference(GetISPCHostCompilerPath(BuildHostPlatform.Current.Platform));
 						CompileAction.StatusDescription = Path.GetFileName(ISPCFile.AbsolutePath);
+						CompileAction.CommandVersion = GetISPCHostCompilerVersion(BuildHostPlatform.Current.Platform).ToString();
 
 						// Disable remote execution to workaround mismatched case on XGE
 						CompileAction.bCanExecuteRemotely = false;
@@ -2054,6 +2119,7 @@ namespace UnrealBuildTool
 					Outputs.Add(OutputFile);
 					LinkAction.ProducedItems.Add(OutputFile);
 					LinkAction.StatusDescription = string.Format("{0}", Path.GetFileName(OutputFile.AbsolutePath));
+					LinkAction.CommandVersion = AndroidClangBuild;
 
 					// LinkAction.bPrintDebugInfo = true;
 
