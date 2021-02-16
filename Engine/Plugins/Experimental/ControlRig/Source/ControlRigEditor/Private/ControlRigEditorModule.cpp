@@ -104,6 +104,7 @@
 #include "AnimSequenceLevelSequenceLink.h"
 #include "Rigs/FKControlRig.h"
 #include "SBakeToControlRigDialog.h"
+#include "ControlRig/Private/Units/Execution/RigUnit_InverseExecution.h"
 
 
 #define LOCTEXT_NAMESPACE "ControlRigEditorModule"
@@ -428,10 +429,14 @@ TSharedRef< SWidget > FControlRigEditorModule::GenerateAnimationMenu(UAnimSequen
 				LOCTEXT("BakeToControlRig", "Bake To Control Rig"), NSLOCTEXT("AnimationModeToolkit", "BakeToControlRigTooltip", "This Control Rig will Drive This Animation."),
 				FNewMenuDelegate::CreateLambda([this, AnimSequence, SkeletalMesh, Skeleton](FMenuBuilder& InSubMenuBuilder)
 					{
+						//todo move to .h for ue5
 						class FControlRigClassFilter : public IClassViewerFilter
 						{
 						public:
-							FControlRigClassFilter(bool bInCheckSkeleton, USkeleton* InSkeleton) : bFilterAssetBySkeleton(bInCheckSkeleton),
+							FControlRigClassFilter(bool bInCheckSkeleton, bool bInCheckAnimatable, bool bInCheckInversion, USkeleton* InSkeleton) :
+								bFilterAssetBySkeleton(bInCheckSkeleton),
+								bFilterExposesAnimatableControls(bInCheckAnimatable),
+								bFilterInversion(bInCheckInversion),
 								AssetRegistry(FModuleManager::GetModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get())
 							{
 								if (InSkeleton)
@@ -440,11 +445,43 @@ TSharedRef< SWidget > FControlRigEditorModule::GenerateAnimationMenu(UAnimSequen
 								}
 							}
 							bool bFilterAssetBySkeleton;
+							bool bFilterExposesAnimatableControls;
+							bool bFilterInversion;
+
 							FString SkeletonName;
 							const IAssetRegistry& AssetRegistry;
 
 							bool MatchesFilter(const FAssetData& AssetData)
 							{
+								bool bExposesAnimatableControls = AssetData.GetTagValueRef<bool>(TEXT("bExposesAnimatableControls"));
+								if (bFilterExposesAnimatableControls == true && bExposesAnimatableControls == false)
+								{
+									return false;
+								}
+								if (bFilterInversion)
+								{
+									bool bHasInversion = false;
+									FAssetDataTagMapSharedView::FFindTagResult Tag = AssetData.TagsAndValues.FindTag(TEXT("SupportedEventNames"));
+									if (Tag.IsSet())
+									{
+										FString EventString = FRigUnit_InverseExecution::EventName.ToString();
+										TArray<FString> SupportedEventNames;
+										Tag.GetValue().ParseIntoArray(SupportedEventNames, TEXT(","), true);
+
+										for (const FString& Name : SupportedEventNames)
+										{
+											if (Name.Contains(EventString))
+											{
+												bHasInversion = true;
+												break;
+											}
+										}
+										if (bHasInversion == false)
+										{
+											return false;
+										}
+									}
+								}
 								if (bFilterAssetBySkeleton)
 								{
 									FString PreviewSkeletalMesh = AssetData.GetTagValueRef<FString>(TEXT("PreviewSkeletalMesh"));
@@ -513,7 +550,7 @@ TSharedRef< SWidget > FControlRigEditorModule::GenerateAnimationMenu(UAnimSequen
 						Options.bShowUnloadedBlueprints = true;
 						Options.NameTypeToDisplay = EClassViewerNameTypeToDisplay::DisplayName;
 
-						TSharedPtr<FControlRigClassFilter> ClassFilter = MakeShareable(new FControlRigClassFilter(bFilterAssetBySkeleton,Skeleton));
+						TSharedPtr<FControlRigClassFilter> ClassFilter = MakeShareable(new FControlRigClassFilter(bFilterAssetBySkeleton,true, true,Skeleton));
 						Options.ClassFilter = ClassFilter;
 						Options.bShowNoneOption = false;
 
@@ -633,6 +670,16 @@ void FControlRigEditorModule::BakeToControlRig(UClass* ControlRigClass, UAnimSeq
 				MeshActor->RegisterAllComponents();
 			}
 
+			//Delete binding from default animating rig
+			FGuid CompGuid = WeakSequencer.Pin()->FindObjectId(*(MeshActor->GetSkeletalMeshComponent()), WeakSequencer.Pin()->GetFocusedTemplateID());
+			if (CompGuid.IsValid())
+			{
+				if (!MovieScene->RemovePossessable(CompGuid))
+				{
+					MovieScene->RemoveSpawnable(CompGuid);
+				}
+			}
+
 			UMovieSceneControlRigParameterTrack* Track = MovieScene->AddTrack<UMovieSceneControlRigParameterTrack>(ActorTrackGuid);
 			if (Track)
 			{
@@ -657,6 +704,7 @@ void FControlRigEditorModule::BakeToControlRig(UClass* ControlRigClass, UAnimSeq
 				Track->SetTrackName(FName(*ObjectName));
 				Track->SetDisplayName(FText::FromString(ObjectName));
 				UMovieSceneControlRigParameterSection* ParamSection = Cast<UMovieSceneControlRigParameterSection>(NewSection);
+			
 				FBakeToControlDelegate BakeCallback = FBakeToControlDelegate::CreateLambda([this, WeakSequencer, LevelSequence, 
 					AnimSequence, MovieScene, ControlRig, ParamSection,ActorTrackGuid, Skeleton]
 				(bool bKeyReduce, float KeyReduceTolerance)
@@ -709,7 +757,10 @@ void FControlRigEditorModule::BakeToControlRig(UClass* ControlRigClass, UAnimSeq
 						AnimLevelLink->SkelTrackGuid = ActorTrackGuid;
 					}
 				});
-				BakeToControlRigDialog::GetBakeParams(BakeCallback);
+
+				FOnWindowClosed BakeClosedCallback = FOnWindowClosed::CreateLambda([](const TSharedRef<SWindow>&) { });
+
+				BakeToControlRigDialog::GetBakeParams(BakeCallback, BakeClosedCallback);
 			}
 		}
 	}

@@ -15,6 +15,7 @@
 
 #include "UObject/UObjectGlobals.h"
 #include "UObject/Package.h"
+#include "UObject/PackageReload.h"
 
 
 FString GMovieSceneCompilerVersion = TEXT("7D4B98092FAC4A6B964ECF72D8279EF8");
@@ -280,6 +281,51 @@ UMovieSceneCompiledDataManager::UMovieSceneCompiledDataManager()
 	IConsoleManager::Get().RegisterConsoleVariableSink_Handle(FConsoleCommandDelegate::CreateUObject(this, &UMovieSceneCompiledDataManager::ConsoleVariableSink));
 
 	ReallocationVersion = 0;
+
+	auto OnPackageReloaded = [this](const EPackageReloadPhase InPackageReloadPhase, FPackageReloadedEvent* InPackageReloadedEvent)
+	{
+		if (InPackageReloadPhase != EPackageReloadPhase::OnPackageFixup)
+		{
+			return;
+		}
+
+		for (const TPair<UObject*, UObject*>& Pair : InPackageReloadedEvent->GetRepointedObjects())
+		{
+			UMovieSceneSequence* OldSequence = Cast<UMovieSceneSequence>(Pair.Key);
+			UMovieSceneSequence* NewSequence = Cast<UMovieSceneSequence>(Pair.Value);
+			if (OldSequence && NewSequence)
+			{
+				FMovieSceneCompiledDataID DataID = this->SequenceToDataIDs.FindRef(OldSequence);
+				if (DataID.IsValid())
+				{
+					// Repoint the data ID for the old sequence to the new sequence
+					{
+						FMovieSceneCompiledDataEntry& Entry = CompiledDataEntries[DataID.Value];
+						this->SequenceToDataIDs.Remove(Entry.SequenceKey);
+
+						// Entry is a ref here, so care is taken to ensure we do not allocate CompiledDataEntries while the ref is around
+						Entry = FMovieSceneCompiledDataEntry();
+						Entry.SequenceKey = NewSequence;
+
+						this->SequenceToDataIDs.Add(Entry.SequenceKey, DataID);
+					}
+
+					// Destroy all the old compiled data as it is no longer valid
+					this->Hierarchies.Remove(DataID.Value);
+					this->TrackTemplates.Remove(DataID.Value);
+					this->TrackTemplateFields.Remove(DataID.Value);
+					this->EntityComponentFields.Remove(DataID.Value);
+
+					++this->ReallocationVersion;
+				}
+			}
+		}
+	};
+
+	if (!HasAnyFlags(RF_ClassDefaultObject))
+	{
+		FCoreUObjectDelegates::OnPackageReloaded.AddWeakLambda(this, OnPackageReloaded);
+	}
 }
 
 void UMovieSceneCompiledDataManager::ConsoleVariableSink()
@@ -401,7 +447,10 @@ void UMovieSceneCompiledDataManager::LoadCompiledData(UMovieSceneSequence* Seque
 
 void UMovieSceneCompiledDataManager::Reset(UMovieSceneSequence* Sequence)
 {
-	FMovieSceneCompiledDataID DataID = GetDataID(Sequence);
+	// Care is taken here not to use GetDataID which _creates_ a new data ID if
+	// one is not available. This ensures that calling Reset() does not create
+	// new data for sequences that have not yet been encountered
+	FMovieSceneCompiledDataID DataID = SequenceToDataIDs.FindRef(Sequence);
 	if (DataID.IsValid())
 	{
 		DestroyTemplate(DataID);
@@ -512,7 +561,7 @@ bool UMovieSceneCompiledDataManager::IsDirty(const FMovieSceneCompiledDataEntry&
 
 bool UMovieSceneCompiledDataManager::IsDirty(FMovieSceneCompiledDataID CompiledDataID) const
 {
-	check(CompiledDataID.IsValid());
+	check(CompiledDataID.IsValid() && CompiledDataEntries.IsValidIndex(CompiledDataID.Value));
 	return IsDirty(CompiledDataEntries[CompiledDataID.Value]);
 }
 
@@ -521,6 +570,7 @@ bool UMovieSceneCompiledDataManager::IsDirty(UMovieSceneSequence* Sequence) cons
 	FMovieSceneCompiledDataID ExistingDataID = SequenceToDataIDs.FindRef(Sequence);
 	if (ExistingDataID.IsValid())
 	{
+		check(CompiledDataEntries.IsValidIndex(ExistingDataID.Value));
 		FMovieSceneCompiledDataEntry Entry = CompiledDataEntries[ExistingDataID.Value];
 		return IsDirty(Entry);
 	}
@@ -531,8 +581,7 @@ bool UMovieSceneCompiledDataManager::IsDirty(UMovieSceneSequence* Sequence) cons
 
 void UMovieSceneCompiledDataManager::Compile(FMovieSceneCompiledDataID DataID)
 {
-	check(DataID.IsValid());
-
+	check(DataID.IsValid() && CompiledDataEntries.IsValidIndex(DataID.Value));
 	UMovieSceneSequence* Sequence = CompiledDataEntries[DataID.Value].GetSequence();
 	check(Sequence);
 	Compile(DataID, Sequence);
@@ -547,6 +596,7 @@ FMovieSceneCompiledDataID UMovieSceneCompiledDataManager::Compile(UMovieSceneSeq
 
 void UMovieSceneCompiledDataManager::Compile(FMovieSceneCompiledDataID DataID, UMovieSceneSequence* Sequence)
 {
+	check(DataID.IsValid() && CompiledDataEntries.IsValidIndex(DataID.Value));
 	FMovieSceneCompiledDataEntry Entry = CompiledDataEntries[DataID.Value];
 	if (!IsDirty(Entry))
 	{
@@ -1046,7 +1096,7 @@ void UMovieSceneCompiledDataManager::GatherTrack(const FMovieSceneBinding* Objec
 			CompileData.HierarchicalBias        = Params.HierarchicalBias;
 			CompileData.bPriorityTearDown       = EvaluationTrack->HasTearDownPriority();
 
-			auto FindChildWithSection = [Section](FMovieSceneEvalTemplatePtr ChildTemplate)
+			auto FindChildWithSection = [Section](const FMovieSceneEvalTemplatePtr& ChildTemplate)
 			{
 				return ChildTemplate.IsValid() && ChildTemplate->GetSourceSection() == Section;
 			};

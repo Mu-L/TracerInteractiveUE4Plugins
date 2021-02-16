@@ -343,6 +343,8 @@ public:
  * Engine that drives the Editor.
  * Separate from UGameEngine because it may have much different functionality than desired for an instance of a game itself.
  */
+PRAGMA_DISABLE_DEPRECATION_WARNINGS
+
 UCLASS(config=Engine, transient)
 class UNREALED_API UEditorEngine : public UEngine
 {
@@ -825,9 +827,8 @@ private:
 	virtual TSharedPtr<SViewport> GetGameViewportWidget() const override;
 	virtual void TriggerStreamingDataRebuild() override;
 
-	PRAGMA_DISABLE_DEPRECATION_WARNINGS
+	// deprecated in 4.26
 	virtual bool NetworkRemapPath(UNetDriver* Driver, FString& Str, bool bReading = true) override;
-	PRAGMA_ENABLE_DEPRECATION_WARNINGS
 	virtual bool NetworkRemapPath(UNetConnection* Connection, FString& Str, bool bReading = true) override;
 	virtual bool NetworkRemapPath(UPendingNetGame* PendingNetGame, FString& Str, bool bReading = true) override;
 
@@ -1820,9 +1821,7 @@ public:
 	 * @param	bInSimulateInEditor	True to start an in-editor simulation session, or false to start a play-in-editor session
 	 */
 	UE_DEPRECATED(4.25, "Override StartPlayInEditorSession(FRequestPlaySessionParams& InRequestParams) instead. InWorld is GetEditorWorldContext().World(), and the other arguments come from InRequestParams now.") 
-	PRAGMA_DISABLE_DEPRECATION_WARNINGS
 	virtual void PlayInEditor( UWorld* InWorld, bool bInSimulateInEditor, FPlayInEditorOverrides Overrides = FPlayInEditorOverrides());
-	PRAGMA_ENABLE_DEPRECATION_WARNINGS
 
 	UE_DEPRECATED(4.25, "Override CreateInnerProcessPIEGameInstance instead.")
 	virtual UGameInstance* CreatePIEGameInstance(int32 InPIEInstance, bool bInSimulateInEditor, bool bAnyBlueprintErrors, bool bStartInSpectatorMode, bool bPlayNetDedicated, bool bPlayStereoscopic, float PIEStartTime);
@@ -3376,6 +3375,7 @@ protected:
 	/** Number of currently running instances logged into an online platform */
 	int32 NumOnlinePIEInstances;
 };
+PRAGMA_ENABLE_DEPRECATION_WARNINGS
 
 //////////////////////////////////////////////////////////////////////////
 // FActorLabelUtilities

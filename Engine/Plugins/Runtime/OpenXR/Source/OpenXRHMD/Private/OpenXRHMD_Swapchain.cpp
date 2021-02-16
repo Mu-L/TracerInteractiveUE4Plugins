@@ -3,6 +3,7 @@
 #include "OpenXRHMD_Swapchain.h"
 #include "OpenXRCore.h"
 #include "OpenXRPlatformRHI.h"
+#include "XRThreadUtils.h"
 
 FOpenXRSwapchain::FOpenXRSwapchain(TArray<FTextureRHIRef>&& InRHITextureSwapChain, const FTextureRHIRef & InRHITexture, XrSwapchain InHandle) :
 	FXRSwapChain(MoveTemp(InRHITextureSwapChain), InRHITexture),
@@ -11,6 +12,26 @@ FOpenXRSwapchain::FOpenXRSwapchain(TArray<FTextureRHIRef>&& InRHITextureSwapChai
 	
 {
 	IncrementSwapChainIndex_RHIThread((int64)XR_NO_DURATION);
+}
+
+FOpenXRSwapchain::~FOpenXRSwapchain() {
+	if (IsInGameThread())
+	{
+		ExecuteOnRenderThread([this]()
+		{
+			ExecuteOnRHIThread([this]()
+			{
+				ReleaseResources_RHIThread();
+			});
+		});
+	}
+	else
+	{
+		ExecuteOnRHIThread([this]()
+		{
+			ReleaseResources_RHIThread();
+		});
+	}
 }
 
 void FOpenXRSwapchain::IncrementSwapChainIndex_RHIThread(int64 Timeout)
@@ -32,18 +53,18 @@ void FOpenXRSwapchain::IncrementSwapChainIndex_RHIThread(int64 Timeout)
 	WaitInfo.next = nullptr;
 	WaitInfo.timeout = Timeout;
 
-	XrResult WaitResult;
+	XrResult WaitResult = XR_SUCCESS;
 	int RetryCount = 3;
 	do
 	{
 		XR_ENSURE(WaitResult = xrWaitSwapchainImage(Handle, &WaitInfo));
-		if (WaitResult == XR_TIMEOUT_EXPIRED)
+		if (WaitResult == XR_TIMEOUT_EXPIRED)	//-V547
 		{
 			UE_LOG(LogHMD, Warning, TEXT("Timed out waiting on swapchain image %u! Attempts remaining %d."), SwapChainIndex_RHIThread, RetryCount);
 		}
 	} while (WaitResult == XR_TIMEOUT_EXPIRED && RetryCount-- > 0);
 
-	if (WaitResult != XR_SUCCESS)
+	if (WaitResult != XR_SUCCESS) //-V547
 	{
 		// We can't continue without acquiring a new swapchain image since we won't have an image available to render to.
 		UE_LOG(LogHMD, Fatal, TEXT("Failed to wait on acquired swapchain image. This usually indicates a problem with the OpenXR runtime."));
@@ -148,11 +169,11 @@ XrSwapchain CreateSwapchain(XrSession InSession, uint32 PlatformFormat, uint32 S
 	{
 		Usage |= XR_SWAPCHAIN_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
 	}
-	if (Flags & TexCreate_ShaderResource)
+	if (TargetableTextureFlags & TexCreate_ShaderResource)
 	{
 		Usage |= XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
 	}
-	if (Flags & TexCreate_UAV)
+	if (TargetableTextureFlags & TexCreate_UAV)
 	{
 		Usage |= XR_SWAPCHAIN_USAGE_UNORDERED_ACCESS_BIT;
 	}

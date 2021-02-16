@@ -377,6 +377,7 @@ void UControlRig::InstantiateVMFromCDO()
 void UControlRig::Execute(const EControlRigState InState, const FName& InEventName)
 {
 	DECLARE_SCOPE_HIERARCHICAL_COUNTER_FUNC()
+	QUICK_SCOPE_CYCLE_COUNTER(STAT_ControlRig_Execute);
 
 	if (VM)
 	{
@@ -410,6 +411,7 @@ void UControlRig::Execute(const EControlRigState InState, const FName& InEventNa
 	}
 
 	FRigUnitContext Context;
+	DrawInterface.Reset();
 	Context.DrawInterface = &DrawInterface;
 	Context.DrawContainer = &DrawContainer;
 
@@ -503,7 +505,7 @@ void UControlRig::Execute(const EControlRigState InState, const FName& InEventNa
 		{
 			bRequiresSetupEvent = bSetupModeEnabled;
 
-			if (bResetInitialTransformsBeforeSetup)
+			if (bResetInitialTransformsBeforeSetup && !bSetupModeEnabled)
 			{
 				if (UControlRig* CDO = Cast<UControlRig>(GetClass()->GetDefaultObject()))
 				{
@@ -2057,6 +2059,26 @@ FRigVMExternalVariable UControlRig::GetExternalVariableFromDescription(const FBP
 }
 
 #endif // WITH_EDITOR
+
+void UControlRig::SetBoneInitialTransformsFromSkeletalMesh(USkeletalMesh* InSkeletalMesh)
+{
+	check(InSkeletalMesh);
+	SetBoneInitialTransformsFromRefSkeleton(InSkeletalMesh->RefSkeleton);
+}
+
+void UControlRig::SetBoneInitialTransformsFromRefSkeleton(const FReferenceSkeleton& InReferenceSkeleton)
+{
+	for (const FRigBone& Bone : GetBoneHierarchy())
+	{
+		int32 BoneIndex = InReferenceSkeleton.FindBoneIndex(Bone.Name);
+		if (BoneIndex != INDEX_NONE)
+		{
+			FTransform LocalInitialTransform = InReferenceSkeleton.GetRefBonePose()[BoneIndex];
+			GetBoneHierarchy().SetInitialLocalTransform(Bone.Index, LocalInitialTransform);
+		}
+	}
+	bResetInitialTransformsBeforeSetup = false;
+}
 
 #undef LOCTEXT_NAMESPACE
 

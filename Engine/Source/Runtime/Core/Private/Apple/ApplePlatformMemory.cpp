@@ -31,6 +31,7 @@
 #include <mach/vm_map.h>
 #include <mach/vm_region.h>
 #include <mach/vm_statistics.h>
+#include <mach/vm_page_size.h>
 #include "HAL/LowLevelMemTracker.h"
 #include "Apple/AppleLLM.h"
 
@@ -401,10 +402,6 @@ const FPlatformMemoryConstants& FApplePlatformMemory::GetConstants()
 	{
 		// Gather platform memory constants.
 		
-		// Get page size.
-		vm_size_t PageSize;
-		host_page_size(mach_host_self(), &PageSize);
-		
 		// Get memory.
 		int64 AvailablePhysical = 0;
 #if PLATFORM_IOS
@@ -447,9 +444,9 @@ const FPlatformMemoryConstants& FApplePlatformMemory::GetConstants()
 		
 		MemoryConstants.TotalPhysical = AvailablePhysical;
 		MemoryConstants.TotalVirtual = AvailablePhysical;
-		MemoryConstants.PageSize = (uint32)PageSize;
-		MemoryConstants.OsAllocationGranularity = (uint32)PageSize;
-		MemoryConstants.BinnedPageSize = FMath::Max((SIZE_T)65536, (SIZE_T)PageSize);
+		MemoryConstants.PageSize = (uint32)vm_page_size;
+		MemoryConstants.OsAllocationGranularity = (uint32)vm_page_size;
+		MemoryConstants.BinnedPageSize = FMath::Max((SIZE_T)65536, (SIZE_T)vm_page_size);
 		MemoryConstants.TotalPhysicalGB = (MemoryConstants.TotalPhysical + 1024 * 1024 * 1024 - 1) / 1024 / 1024 / 1024;
 	}
 	
@@ -576,12 +573,12 @@ void* _Nullable FApplePlatformMemory::BinnedAllocFromOS(SIZE_T Size)
 	// or we already got rid of the extra memory that was allocated in the front.
 	checkf((reinterpret_cast<SIZE_T>(Pointer) % ExpectedAlignment) == 0, TEXT("BinnedAllocFromOS(): Internal error: did not align the pointer as expected."));
 
-	// do not unmap if we're trying to reduce the number of distinct maps, since holes prevent the Linux kernel from coalescing two adjoining mmap()s into a single VMA
+	// do not unmap if we're trying to reduce the number of distinct maps, since holes prevent the kernel from coalescing two adjoining mmap()s into a single VMA
 	if (!UE4_PLATFORM_REDUCE_NUMBER_OF_MAPS)
 	{
 		// Now unmap the tail only, if any, but leave just enough space for the descriptor
 		void* TailPtr = reinterpret_cast<void*>(reinterpret_cast<SIZE_T>(Pointer) + SizeInWholePages + DescriptorSize);
-		SIZE_T TailSize = ActualSizeMapped - SizeInWholePages - DescriptorSize;
+		SSIZE_T TailSize = ActualSizeMapped - SizeInWholePages - DescriptorSize;
 
 		if (LIKELY(TailSize > 0))
 		{
@@ -808,13 +805,9 @@ void LLMFree(void* Addr, size_t Size)
 bool FApplePlatformMemory::GetLLMAllocFunctions(void*_Nonnull(*_Nonnull&OutAllocFunction)(size_t), void(*_Nonnull&OutFreeFunction)(void*, size_t), int32& OutAlignment)
 {
 #if ENABLE_LOW_LEVEL_MEM_TRACKER
-    // Get page size.
-    vm_size_t PageSize;
-    host_page_size(mach_host_self(), &PageSize);
-
     OutAllocFunction = LLMAlloc;
     OutFreeFunction = LLMFree;
-    OutAlignment = PageSize;
+    OutAlignment = vm_page_size;
     return true;
 #else
     return false;

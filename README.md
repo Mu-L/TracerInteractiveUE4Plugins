@@ -1,7 +1,7 @@
 Tracer Interactive
 =============
 
-*  [Web UI](https://tracerinteractive.com/plugins/webui) - Create a web-based user interface using the Chromium Embedded Framework
+*  [Web UI](https://tracerinteractive.com/plugins/webui) - Create a web-based user interface using blueprints
 	*  Downloads: [4.26](https://github.com/tracerinteractive/UnrealEngine/releases/download/4.26.0/WebUI-4.26.zip), [4.25](https://github.com/tracerinteractive/UnrealEngine/releases/download/4.25.0/WebUI-4.25.zip), [4.24](https://github.com/tracerinteractive/UnrealEngine/releases/download/4.24.0/WebUI-4.24.zip)
 	*  [Source](https://github.com/tracerinteractive/UnrealEngine/tree/4.26/Engine/Plugins/Runtime/WebUI)
 	*  [Documentation](https://cdn.tracerinteractive.com/webui/documentation.pdf)

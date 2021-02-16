@@ -25,6 +25,17 @@ static FAutoConsoleVariableRef CVarHairStrands_UseCards(TEXT("r.HairStrands.UseC
 static int32 GHairStrands_SwapBufferEndOfFrame = 1;
 static FAutoConsoleVariableRef CVarGHairStrands_SwapBufferEndOfFrame(TEXT("r.HairStrands.SwapEndOfFrame"), GHairStrands_SwapBufferEndOfFrame, TEXT("Swap rendering buffer at the end of frame. This is an experimental toggle. Default:1"));
 
+static int32 GHairStrands_ManualSkinCache = 1;
+static FAutoConsoleVariableRef CVarGHairStrands_ManualSkinCache(TEXT("r.HairStrands.ManualSkinCache"), GHairStrands_ManualSkinCache, TEXT("If skin cache is not enabled, and grooms use skinning method, this enable a simple skin cache mechanisme for groom. Default:enable"));
+
+static int32 GHairStrands_InterpolationFrustumCullingEnable = 1;
+static FAutoConsoleVariableRef CVarHairStrands_InterpolationFrustumCullingEnable(TEXT("r.HairStrands.Interoplation.FrustumCulling"), GHairStrands_InterpolationFrustumCullingEnable, TEXT("Swap rendering buffer at the end of frame. This is an experimental toggle. Default:1"));
+
+bool IsHairStrandsSkinCacheEnable()
+{
+	return GHairStrands_ManualSkinCache > 0;
+}
+
 DEFINE_LOG_CATEGORY_STATIC(LogGroomManager, Log, All);
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -91,10 +102,36 @@ void UnregisterHairStrands(uint32 ComponentId)
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
+bool HasHairInstanceSimulationEnable(FHairGroupInstance* Instance, int32 MeshLODIndex);
+
+static bool IsInstanceVisible(
+	const FSceneView* View,
+	FHairGroupInstance* Instance)
+{
+	// Frustum culling for rendering strands. Update position only for visible/in camera frustum
+	if (GHairStrands_InterpolationFrustumCullingEnable > 0)
+	{
+		if (!Instance->ProxyBounds)
+		{
+			return false;
+		}
+
+		const FSphere InstanceBound = Instance->ProxyBounds->GetSphere();
+		bool bFullyContained = false;
+		if (!View->ViewFrustum.IntersectSphere(InstanceBound.Center, InstanceBound.W, bFullyContained))
+		{
+			return false;
+		}
+	}
+
+	return true;
+}
+
 bool NeedsUpdateCardsMeshTriangles();
 
-void RunHairStrandsInterpolation(
+static void RunInternalHairStrandsInterpolation(
 	FRDGBuilder& GraphBuilder,
+	const FSceneView* View,
 	EWorldType::Type WorldType, 
 	const FGPUSkinCache* SkinCache,
 	const FShaderDrawDebugData* ShaderDrawData,
@@ -104,13 +141,15 @@ void RunHairStrandsInterpolation(
 {
 	check(IsInRenderingThread());
 
-	DECLARE_GPU_STAT(HairStrandsInterpolationGrouped);
-	RDG_EVENT_SCOPE(GraphBuilder, "HairStrandsInterpolationGrouped");
-	RDG_GPU_STAT_SCOPE(GraphBuilder, HairStrandsInterpolationGrouped);
-
 	// Update dynamic mesh triangles
 	for (FHairGroupInstance* Instance : GHairManager.Instances)
 	{
+		// Frustum culling for rendering strands. Update position only for visible/in camera frustum
+		if (Type == EHairStrandsInterpolationType::RenderStrands && !IsInstanceVisible(View, Instance))
+		{
+			continue;
+		}
+
 		int32 MeshLODIndex = -1;
 		if (Instance->WorldType != WorldType || Instance->GeometryType == EHairGeometryType::NoneGeometry)
 			continue;
@@ -124,7 +163,8 @@ void RunHairStrandsInterpolation(
 			{
 				CachedGeometry = SkinCache->GetCachedGeometry(Instance->Debug.SkeletalComponent->ComponentId.PrimIDValue);
 			}
-			else
+
+			if (IsHairStrandsSkinCacheEnable() && CachedGeometry.Sections.Num() == 0)
 			{
 				//#hair_todo: Need to have a (frame) cache to insure that we don't recompute the same projection several time
 				// Actual populate the cache with only the needed part basd on the groom projection data. At the moment it recompute everything ...
@@ -234,6 +274,12 @@ void RunHairStrandsInterpolation(
 			if (Instance->WorldType != WorldType || Instance->GeometryType == EHairGeometryType::NoneGeometry)
 				continue;
 
+			// Frustum culling guide deformation if the instance does not have any simulation
+			if (Instance->GeometryType == EHairGeometryType::Strands && !HasHairInstanceSimulationEnable(Instance, Instance->Debug.MeshLODIndex) && !IsInstanceVisible(View, Instance))
+			{
+				continue;
+			}
+
 			ResetHairStrandsInterpolation(GraphBuilder, ShaderMap, Instance, Instance->Debug.MeshLODIndex);
 		}
 	}
@@ -246,6 +292,12 @@ void RunHairStrandsInterpolation(
 			if (Instance->WorldType != WorldType || Instance->GeometryType == EHairGeometryType::NoneGeometry)
 				continue;
 
+			// Frustum culling for rendering strands. Update position only for visible/in camera frustum
+			if (!IsInstanceVisible(View, Instance))
+			{
+				continue;
+			}
+
  			ComputeHairStrandsInterpolation(
 				GraphBuilder, 
 				ShaderMap,
@@ -256,6 +308,59 @@ void RunHairStrandsInterpolation(
 		}
 	}
 }
+
+static void RunHairStrandsInterpolation_Guide(
+	FRDGBuilder& GraphBuilder,
+	const FSceneView* View,
+	EWorldType::Type WorldType,
+	const FGPUSkinCache* SkinCache,
+	const FShaderDrawDebugData* ShaderDrawData,
+	FGlobalShaderMap* ShaderMap,
+	FHairStrandClusterData* ClusterData)
+{
+	check(IsInRenderingThread());
+
+	DECLARE_GPU_STAT(HairGuideInterpolation);
+	RDG_EVENT_SCOPE(GraphBuilder, "HairGuideInterpolation");
+	RDG_GPU_STAT_SCOPE(GraphBuilder, HairGuideInterpolation);
+
+	RunInternalHairStrandsInterpolation(
+		GraphBuilder,
+		View,
+		WorldType,
+		SkinCache,
+		ShaderDrawData,
+		ShaderMap,
+		EHairStrandsInterpolationType::SimulationStrands,
+		ClusterData);
+}
+
+static void RunHairStrandsInterpolation_Strands(
+	FRDGBuilder& GraphBuilder,
+	const FSceneView* View,
+	EWorldType::Type WorldType,
+	const FGPUSkinCache* SkinCache,
+	const FShaderDrawDebugData* ShaderDrawData,
+	FGlobalShaderMap* ShaderMap,
+	FHairStrandClusterData* ClusterData)
+{
+	check(IsInRenderingThread());
+
+	DECLARE_GPU_STAT(HairStrandsInterpolation);
+	RDG_EVENT_SCOPE(GraphBuilder, "HairStrandsInterpolation");
+	RDG_GPU_STAT_SCOPE(GraphBuilder, HairStrandsInterpolation);
+
+	RunInternalHairStrandsInterpolation(
+		GraphBuilder,
+		View,
+		WorldType,
+		SkinCache,
+		ShaderDrawData,
+		ShaderMap,
+		EHairStrandsInterpolationType::RenderStrands,
+		ClusterData);
+}
+
 
 static void RunHairStrandsGatherCluster(
 	EWorldType::Type WorldType,
@@ -606,13 +711,13 @@ void ProcessHairStrandsBookmark(
 	}
 	else if (Bookmark == EHairStrandsBookmark::ProcessGuideInterpolation)
 	{
-		RunHairStrandsInterpolation(
+		RunHairStrandsInterpolation_Guide(
 			GraphBuilder,
+			Parameters.View,
 			Parameters.WorldType,
 			Parameters.SkinCache,
 			Parameters.DebugShaderData,
 			Parameters.ShaderMap,
-			EHairStrandsInterpolationType::SimulationStrands,
 			&Parameters.HairClusterData);
 	}
 	else if (Bookmark == EHairStrandsBookmark::ProcessGatherCluster)
@@ -623,13 +728,13 @@ void ProcessHairStrandsBookmark(
 	}
 	else if (Bookmark == EHairStrandsBookmark::ProcessStrandsInterpolation)
 	{
-		RunHairStrandsInterpolation(
+		RunHairStrandsInterpolation_Strands(
 			GraphBuilder,
+			Parameters.View,
 			Parameters.WorldType,
 			Parameters.SkinCache,
 			Parameters.DebugShaderData,
 			Parameters.ShaderMap,
-			EHairStrandsInterpolationType::RenderStrands,
 			&Parameters.HairClusterData);
 	}
 	else if (Bookmark == EHairStrandsBookmark::ProcessDebug)

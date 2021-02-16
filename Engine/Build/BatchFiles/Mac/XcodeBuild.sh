@@ -7,10 +7,12 @@
 # Setup Environment & Mono
 source Engine/Build/BatchFiles/Mac/SetupEnvironment.sh -mono Engine/Build/BatchFiles/Mac
 
-# First make sure that the UnrealBuildTool is up-to-date
-if ! xbuild /property:Configuration=Development /verbosity:quiet /nologo /p:NoWarn=1591 Engine/Source/Programs/UnrealBuildTool/UnrealBuildTool.csproj; then
-  echo "Failed to build to build tool (UnrealBuildTool)"
-  exit 1
+# If this is a source drop of the engine make sure that the UnrealBuildTool is up-to-date
+if [ ! -f Engine/Build/InstalledBuild.txt ]; then
+	if ! xbuild /property:Configuration=Development /verbosity:quiet /nologo /p:NoWarn=1591 Engine/Source/Programs/UnrealBuildTool/UnrealBuildTool.csproj; then
+		echo "Failed to build to build tool (UnrealBuildTool)"
+		exit 1
+	fi
 fi
 
 #echo "Raw Args: $*"
@@ -52,7 +54,14 @@ case $PLATFORM in
 	;;
 esac
 
-echo "Processing $ACTION for Target=$TARGET Platform=$PLATFORM Configuration=$CONFIGURATION $TRAILINGARGS"
+if [[ $ARCHS ]]; then
+	# convert the space in xcode's multiple architecture (arm64 x86_64) argument into the standard + that UBT expects (arm64+x86_64)
+	UBT_ARCHFLAG="-architecture=${ARCHS/ /+}" 
+else
+  	UBT_ARCHFLAG=""
+fi
+
+echo "Processing $ACTION for Target=$TARGET Platform=$PLATFORM Configuration=$CONFIGURATION $UBT_ARCHFLAG $TRAILINGARGS "
 
 # Add additional flags based on actions, arguments, and env properties
 AdditionalFlags=""
@@ -95,8 +104,8 @@ elif [ $ACTION == "clean" ]; then
 	AdditionalFlags="-clean"
 fi
 
-echo Running Engine/Binaries/DotNET/UnrealBuildTool.exe $TARGET $PLATFORM $CONFIGURATION "$TRAILINGARGS" $AdditionalFlags
-mono Engine/Binaries/DotNET/UnrealBuildTool.exe $TARGET $PLATFORM $CONFIGURATION "$TRAILINGARGS" $AdditionalFlags
+echo Running Engine/Binaries/DotNET/UnrealBuildTool.exe $TARGET $PLATFORM $CONFIGURATION "$TRAILINGARGS" $UBT_ARCHFLAG $AdditionalFlags
+mono Engine/Binaries/DotNET/UnrealBuildTool.exe $TARGET $PLATFORM $CONFIGURATION "$TRAILINGARGS" $UBT_ARCHFLAG $AdditionalFlags
 
 ExitCode=$?
 if [ $ExitCode -eq 254 ] || [ $ExitCode -eq 255 ] || [ $ExitCode -eq 2 ]; then

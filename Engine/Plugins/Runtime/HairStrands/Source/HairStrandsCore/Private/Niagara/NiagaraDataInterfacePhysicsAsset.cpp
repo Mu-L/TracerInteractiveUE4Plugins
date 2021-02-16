@@ -90,8 +90,6 @@ void CreateInternalBuffer(FRWBuffer& OutputBuffer)
 	if (ElementCount > 0)
 	{
 		const uint32 BufferCount = ElementCount;
-		const uint32 BufferBytes = sizeof(BufferType) * BufferCount;
-
 		OutputBuffer.Initialize(sizeof(BufferType), BufferCount, PixelFormat, BUF_Static);
 	}
 }
@@ -123,6 +121,63 @@ void FillCurrentTransforms(const FTransform& ElementTransform, uint32& ElementCo
 	++ElementCount;
 }
 
+void GetNumPrimitives(const TArray<TWeakObjectPtr<UPhysicsAsset>>& PhysicsAssets, const TArray<TWeakObjectPtr<USkeletalMeshComponent>>& SkeletalMeshs, uint32& NumBoxes, uint32& NumSpheres, uint32& NumCapsules)
+{
+	NumBoxes = 0;
+	NumSpheres = 0;
+	NumCapsules = 0;
+
+	for (int32 ComponentIndex = 0; ComponentIndex < SkeletalMeshs.Num(); ++ComponentIndex)
+	{
+		TWeakObjectPtr<UPhysicsAsset> PhysicsAsset = PhysicsAssets[ComponentIndex];
+		if (PhysicsAsset.IsValid() && PhysicsAsset.Get() != nullptr)
+		{
+			USkeletalMesh* SkelMesh = (SkeletalMeshs[ComponentIndex].Get() && SkeletalMeshs[ComponentIndex]->SkeletalMesh) ? SkeletalMeshs[ComponentIndex]->SkeletalMesh : PhysicsAsset->GetPreviewMesh();
+			if (!SkelMesh)
+			{
+				continue;
+			}
+
+			const FReferenceSkeleton* RefSkeleton = &SkelMesh->RefSkeleton;
+			if (RefSkeleton != nullptr)
+			{
+				if (RefSkeleton->GetNum() > 0)
+				{
+					for (const UBodySetup* BodySetup : PhysicsAsset->SkeletalBodySetups)
+					{
+						const FName BoneName = BodySetup->BoneName;
+						const int32 BoneIndex = RefSkeleton->FindBoneIndex(BoneName);
+						if (BoneIndex != INDEX_NONE && BoneIndex < RefSkeleton->GetNum())
+						{
+							for (const FKBoxElem& BoxElem : BodySetup->AggGeom.BoxElems)
+							{
+								if (CollisionEnabledHasPhysics(BoxElem.GetCollisionEnabled()))
+								{
+									NumBoxes += 1;
+								}
+							}
+							for (const FKSphereElem& SphereElem : BodySetup->AggGeom.SphereElems)
+							{
+								if (CollisionEnabledHasPhysics(SphereElem.GetCollisionEnabled()))
+								{
+									NumSpheres += 1;
+								}
+							}
+							for (const FKSphylElem& CapsuleElem : BodySetup->AggGeom.SphylElems)
+							{
+								if (CollisionEnabledHasPhysics(CapsuleElem.GetCollisionEnabled()))
+								{
+									NumCapsules += 1;
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
 void CreateInternalArrays(const TArray<TWeakObjectPtr<UPhysicsAsset>>& PhysicsAssets, const TArray<TWeakObjectPtr<USkeletalMeshComponent>>& SkeletalMeshs,
 	FNDIPhysicsAssetArrays* OutAssetArrays, const FTransform& InWorldTransform)
 {
@@ -137,40 +192,8 @@ void CreateInternalArrays(const TArray<TWeakObjectPtr<UPhysicsAsset>>& PhysicsAs
 		uint32 NumSpheres = 0;
 		uint32 NumCapsules = 0;
 
-		for (int32 ComponentIndex = 0; ComponentIndex < SkeletalMeshs.Num(); ++ComponentIndex)
-		{
-			TWeakObjectPtr<UPhysicsAsset> PhysicsAsset = PhysicsAssets[ComponentIndex];
-			if (PhysicsAsset.IsValid() && PhysicsAsset.Get() != nullptr)
-			{
-				USkeletalMesh* SkelMesh = PhysicsAsset->GetPreviewMesh();
-				if (!SkelMesh)
-				{
-					continue;
-				}
-
-				const FReferenceSkeleton* RefSkeleton = &SkelMesh->RefSkeleton;
-				if (RefSkeleton != nullptr)
-				{
-					if (RefSkeleton->GetNum() > 0)
-					{
-
-						for (const UBodySetup* BodySetup : PhysicsAsset->SkeletalBodySetups)
-						{
-							const FName BoneName = BodySetup->BoneName;
-							const int32 BoneIndex = RefSkeleton->FindBoneIndex(BoneName);
-							if (BoneIndex != INDEX_NONE && BoneIndex < RefSkeleton->GetNum())
-							{
-								NumBoxes += BodySetup->AggGeom.BoxElems.Num();
-								NumSpheres += BodySetup->AggGeom.SphereElems.Num();
-								NumCapsules += BodySetup->AggGeom.SphylElems.Num();
-							}
-						}
-						//UE_LOG(LogPhysicsAsset, Warning, TEXT("PhysicsAsset = %s | SkeletalMesh = %d | Num Capsules = %d | Num Spheres = %d | Num Boxes = %d"), *PhysicsAsset->GetName(), SkeletalMeshs[ComponentIndex].Get(), 
-						//				NumCapsules, NumSpheres, NumBoxes);
-					}
-				}
-			}
-		}
+		GetNumPrimitives(PhysicsAssets, SkeletalMeshs, NumBoxes, NumSpheres, NumCapsules);
+		
 		if ((NumBoxes + NumSpheres + NumCapsules) < PHYSICS_ASSET_MAX_PRIMITIVES)
 		{
 			OutAssetArrays->ElementOffsets.BoxOffset = 0;
@@ -194,7 +217,7 @@ void CreateInternalArrays(const TArray<TWeakObjectPtr<UPhysicsAsset>>& PhysicsAs
 				TWeakObjectPtr<UPhysicsAsset> PhysicsAsset = PhysicsAssets[ComponentIndex];
 				if (PhysicsAsset.IsValid() && PhysicsAsset.Get() != nullptr)
 				{
-					USkeletalMesh* SkelMesh = PhysicsAsset->GetPreviewMesh();
+					USkeletalMesh* SkelMesh = (SkeletalMeshs[ComponentIndex].Get() && SkeletalMeshs[ComponentIndex]->SkeletalMesh) ? SkeletalMeshs[ComponentIndex]->SkeletalMesh : PhysicsAsset->GetPreviewMesh();
 					if (!SkelMesh)
 					{
 						continue;
@@ -218,35 +241,44 @@ void CreateInternalArrays(const TArray<TWeakObjectPtr<UPhysicsAsset>>& PhysicsAs
 
 									for (const FKBoxElem& BoxElem : BodySetup->AggGeom.BoxElems)
 									{
-										const FTransform RestElement = FTransform(BoxElem.Rotation, BoxElem.Center) * RestTransform;
-										FillCurrentTransforms(RestElement, BoxCount, OutAssetArrays->RestTransform, OutAssetArrays->RestInverse);
-										--BoxCount;
+										if (CollisionEnabledHasPhysics(BoxElem.GetCollisionEnabled()))
+										{
+											const FTransform RestElement = FTransform(BoxElem.Rotation, BoxElem.Center) * RestTransform;
+											FillCurrentTransforms(RestElement, BoxCount, OutAssetArrays->RestTransform, OutAssetArrays->RestInverse);
+											--BoxCount;
 
-										const FTransform ElementTransform = FTransform(BoxElem.Rotation, BoxElem.Center) * BoneTransform;
-										OutAssetArrays->ElementExtent[BoxCount] = FVector4(BoxElem.X, BoxElem.Y, BoxElem.Z, 0);
-										FillCurrentTransforms(ElementTransform, BoxCount, OutAssetArrays->CurrentTransform, OutAssetArrays->InverseTransform);
+											const FTransform ElementTransform = FTransform(BoxElem.Rotation, BoxElem.Center) * BoneTransform;
+											OutAssetArrays->ElementExtent[BoxCount] = FVector4(BoxElem.X, BoxElem.Y, BoxElem.Z, 0);
+											FillCurrentTransforms(ElementTransform, BoxCount, OutAssetArrays->CurrentTransform, OutAssetArrays->InverseTransform);
+										}
 									}
 
 									for (const FKSphereElem& SphereElem : BodySetup->AggGeom.SphereElems)
 									{
-										const FTransform RestElement = FTransform(SphereElem.Center) * RestTransform;
-										FillCurrentTransforms(RestElement, SphereCount, OutAssetArrays->RestTransform, OutAssetArrays->RestInverse);
-										--SphereCount;
+										if (CollisionEnabledHasPhysics(SphereElem.GetCollisionEnabled()))
+										{
+											const FTransform RestElement = FTransform(SphereElem.Center) * RestTransform;
+											FillCurrentTransforms(RestElement, SphereCount, OutAssetArrays->RestTransform, OutAssetArrays->RestInverse);
+											--SphereCount;
 
-										const FTransform ElementTransform = FTransform(SphereElem.Center) * BoneTransform;
-										OutAssetArrays->ElementExtent[SphereCount] = FVector4(SphereElem.Radius, 0, 0, 0);
-										FillCurrentTransforms(ElementTransform, SphereCount, OutAssetArrays->CurrentTransform, OutAssetArrays->InverseTransform);
+											const FTransform ElementTransform = FTransform(SphereElem.Center) * BoneTransform;
+											OutAssetArrays->ElementExtent[SphereCount] = FVector4(SphereElem.Radius, 0, 0, 0);
+											FillCurrentTransforms(ElementTransform, SphereCount, OutAssetArrays->CurrentTransform, OutAssetArrays->InverseTransform);
+										}
 									}
 
 									for (const FKSphylElem& CapsuleElem : BodySetup->AggGeom.SphylElems)
 									{
-										const FTransform RestElement = FTransform(CapsuleElem.Rotation, CapsuleElem.Center) * RestTransform;
-										FillCurrentTransforms(RestElement, CapsuleCount, OutAssetArrays->RestTransform, OutAssetArrays->RestInverse);
-										--CapsuleCount;
+										if (CollisionEnabledHasPhysics(CapsuleElem.GetCollisionEnabled()))
+										{
+											const FTransform RestElement = FTransform(CapsuleElem.Rotation, CapsuleElem.Center) * RestTransform;
+											FillCurrentTransforms(RestElement, CapsuleCount, OutAssetArrays->RestTransform, OutAssetArrays->RestInverse);
+											--CapsuleCount;
 
-										const FTransform ElementTransform = FTransform(CapsuleElem.Rotation, CapsuleElem.Center) * BoneTransform;
-										OutAssetArrays->ElementExtent[CapsuleCount] = FVector4(CapsuleElem.Radius, CapsuleElem.Length, 0, 0);
-										FillCurrentTransforms(ElementTransform, CapsuleCount, OutAssetArrays->CurrentTransform, OutAssetArrays->InverseTransform);
+											const FTransform ElementTransform = FTransform(CapsuleElem.Rotation, CapsuleElem.Center) * BoneTransform;
+											OutAssetArrays->ElementExtent[CapsuleCount] = FVector4(CapsuleElem.Radius, CapsuleElem.Length, 0, 0);
+											FillCurrentTransforms(ElementTransform, CapsuleCount, OutAssetArrays->CurrentTransform, OutAssetArrays->InverseTransform);
+										}
 									}
 								}
 							}
@@ -269,6 +301,19 @@ void UpdateInternalArrays(const TArray<TWeakObjectPtr<UPhysicsAsset>>& PhysicsAs
 {
 	if (OutAssetArrays != nullptr && OutAssetArrays->ElementOffsets.NumElements < PHYSICS_ASSET_MAX_PRIMITIVES)
 	{
+		uint32 NumBoxes = 0;
+		uint32 NumSpheres = 0;
+		uint32 NumCapsules = 0;
+
+		GetNumPrimitives(PhysicsAssets, SkeletalMeshs, NumBoxes, NumSpheres, NumCapsules);
+
+		if (((OutAssetArrays->ElementOffsets.SphereOffset - OutAssetArrays->ElementOffsets.BoxOffset) != NumBoxes) || 
+			((OutAssetArrays->ElementOffsets.CapsuleOffset - OutAssetArrays->ElementOffsets.SphereOffset) != NumSpheres) ||
+			((OutAssetArrays->ElementOffsets.NumElements - OutAssetArrays->ElementOffsets.CapsuleOffset) != NumCapsules))
+		{
+			CreateInternalArrays(PhysicsAssets, SkeletalMeshs, OutAssetArrays, InWorldTransform);
+		}
+
 		OutAssetArrays->PreviousTransform = OutAssetArrays->CurrentTransform;
 		OutAssetArrays->PreviousInverse = OutAssetArrays->InverseTransform;
 
@@ -285,7 +330,7 @@ void UpdateInternalArrays(const TArray<TWeakObjectPtr<UPhysicsAsset>>& PhysicsAs
 			TWeakObjectPtr<UPhysicsAsset> PhysicsAsset = PhysicsAssets[ComponentIndex];
 			if (PhysicsAsset.IsValid() && PhysicsAsset.Get() != nullptr)
 			{
-				USkeletalMesh* SkelMesh = PhysicsAsset->GetPreviewMesh();
+				USkeletalMesh* SkelMesh = (SkeletalMeshs[ComponentIndex].Get() && SkeletalMeshs[ComponentIndex]->SkeletalMesh) ? SkeletalMeshs[ComponentIndex]->SkeletalMesh : PhysicsAsset->GetPreviewMesh();
 				if (!SkelMesh)
 				{
 					continue;
@@ -307,20 +352,29 @@ void UpdateInternalArrays(const TArray<TWeakObjectPtr<UPhysicsAsset>>& PhysicsAs
 
 							for (const FKBoxElem& BoxElem : BodySetup->AggGeom.BoxElems)
 							{
-								const FTransform ElementTransform = FTransform(BoxElem.Rotation, BoxElem.Center) * BoneTransform;
-								FillCurrentTransforms(ElementTransform, BoxCount, OutAssetArrays->CurrentTransform, OutAssetArrays->InverseTransform);
+								if (CollisionEnabledHasPhysics(BoxElem.GetCollisionEnabled()))
+								{
+									const FTransform ElementTransform = FTransform(BoxElem.Rotation, BoxElem.Center) * BoneTransform;
+									FillCurrentTransforms(ElementTransform, BoxCount, OutAssetArrays->CurrentTransform, OutAssetArrays->InverseTransform);
+								}
 							}
 
 							for (const FKSphereElem& SphereElem : BodySetup->AggGeom.SphereElems)
 							{
-								const FTransform ElementTransform = FTransform(SphereElem.Center) * BoneTransform;
-								FillCurrentTransforms(ElementTransform, SphereCount, OutAssetArrays->CurrentTransform, OutAssetArrays->InverseTransform);
+								if (CollisionEnabledHasPhysics(SphereElem.GetCollisionEnabled()))
+								{
+									const FTransform ElementTransform = FTransform(SphereElem.Center) * BoneTransform;
+									FillCurrentTransforms(ElementTransform, SphereCount, OutAssetArrays->CurrentTransform, OutAssetArrays->InverseTransform);
+								}
 							}
 
 							for (const FKSphylElem& CapsuleElem : BodySetup->AggGeom.SphylElems)
 							{
-								const FTransform ElementTransform = FTransform(CapsuleElem.Rotation, CapsuleElem.Center) * BoneTransform;
-								FillCurrentTransforms(ElementTransform, CapsuleCount, OutAssetArrays->CurrentTransform, OutAssetArrays->InverseTransform);
+								if (CollisionEnabledHasPhysics(CapsuleElem.GetCollisionEnabled()))
+								{
+									const FTransform ElementTransform = FTransform(CapsuleElem.Rotation, CapsuleElem.Center) * BoneTransform;
+									FillCurrentTransforms(ElementTransform, CapsuleCount, OutAssetArrays->CurrentTransform, OutAssetArrays->InverseTransform);
+								}
 							}
 						}
 					}
@@ -565,22 +619,16 @@ void FNDIPhysicsAssetProxy::PreStage(FRHICommandList& RHICmdList, const FNiagara
 			UpdateInternalBuffer<FVector4, EPixelFormat::PF_A32B32G32R32F, PHYSICS_ASSET_MAX_TRANSFORMS>(ProxyData->AssetArrays.PreviousTransform, ProxyData->AssetBuffer->PreviousTransformBuffer);
 			UpdateInternalBuffer<FVector4, EPixelFormat::PF_A32B32G32R32F, PHYSICS_ASSET_MAX_TRANSFORMS>(ProxyData->AssetArrays.InverseTransform, ProxyData->AssetBuffer->InverseTransformBuffer);
 			UpdateInternalBuffer<FVector4, EPixelFormat::PF_A32B32G32R32F, PHYSICS_ASSET_MAX_TRANSFORMS>(ProxyData->AssetArrays.PreviousInverse, ProxyData->AssetBuffer->PreviousInverseBuffer);
+
+			UpdateInternalBuffer<FVector4, EPixelFormat::PF_A32B32G32R32F, PHYSICS_ASSET_MAX_TRANSFORMS>(ProxyData->AssetArrays.RestTransform, ProxyData->AssetBuffer->RestTransformBuffer);
+			UpdateInternalBuffer<FVector4, EPixelFormat::PF_A32B32G32R32F, PHYSICS_ASSET_MAX_TRANSFORMS>(ProxyData->AssetArrays.RestInverse, ProxyData->AssetBuffer->RestInverseBuffer);
+			UpdateInternalBuffer<FVector4, EPixelFormat::PF_A32B32G32R32F, PHYSICS_ASSET_MAX_PRIMITIVES>(ProxyData->AssetArrays.ElementExtent, ProxyData->AssetBuffer->ElementExtentBuffer);
 		}
 	}
 }
 
 void FNDIPhysicsAssetProxy::ResetData(FRHICommandList& RHICmdList, const FNiagaraDataInterfaceArgs& Context)
-{
-	FNDIPhysicsAssetData* ProxyData =
-		SystemInstancesToProxyData.Find(Context.SystemInstanceID);
-
-	if (ProxyData != nullptr && ProxyData->AssetBuffer)
-	{
-		UpdateInternalBuffer<FVector4, EPixelFormat::PF_A32B32G32R32F, PHYSICS_ASSET_MAX_TRANSFORMS>(ProxyData->AssetArrays.RestTransform, ProxyData->AssetBuffer->RestTransformBuffer);
-		UpdateInternalBuffer<FVector4, EPixelFormat::PF_A32B32G32R32F, PHYSICS_ASSET_MAX_TRANSFORMS>(ProxyData->AssetArrays.RestInverse, ProxyData->AssetBuffer->RestInverseBuffer);
-		UpdateInternalBuffer<FVector4, EPixelFormat::PF_A32B32G32R32F, PHYSICS_ASSET_MAX_PRIMITIVES>(ProxyData->AssetArrays.ElementExtent, ProxyData->AssetBuffer->ElementExtentBuffer);
-	}
-}
+{}
 
 //------------------------------------------------------------------------------------------------------------
 
@@ -660,19 +708,20 @@ void UNiagaraDataInterfacePhysicsAsset::ExtractSourceComponent(FNiagaraSystemIns
 		else
 		{
 			PhysicsAssets.Add(SourceComponent->GetPhysicsAsset());
-		}
-		if (USkeletalMeshComponent* ParentComp = Cast<USkeletalMeshComponent>(SourceComponent->GetAttachParent()))
-		{
-			TArray<USceneComponent*> SceneComponents;
-			ParentComp->GetChildrenComponents(false, SceneComponents);
 
-			for (USceneComponent* ActorComp : SceneComponents)
+			if (USkeletalMeshComponent* ParentComp = Cast<USkeletalMeshComponent>(SourceComponent->GetAttachParent()))
 			{
-				USkeletalMeshComponent* SourceComp = Cast<USkeletalMeshComponent>(ActorComp);
-				if (SourceComp && SourceComp->SkeletalMesh && SourceComp->GetPhysicsAsset() && SourceComp != SourceComponent)
+				TArray<USceneComponent*> SceneComponents;
+				ParentComp->GetChildrenComponents(false, SceneComponents);
+
+				for (USceneComponent* ActorComp : SceneComponents)
 				{
-					SourceComponents.Add(SourceComp);
-					PhysicsAssets.Add(SourceComp->GetPhysicsAsset());
+					USkeletalMeshComponent* SourceComp = Cast<USkeletalMeshComponent>(ActorComp);
+					if (SourceComp && SourceComp->SkeletalMesh && SourceComp->GetPhysicsAsset() && SourceComp != SourceComponent)
+					{
+						SourceComponents.Add(SourceComp);
+						PhysicsAssets.Add(SourceComp->GetPhysicsAsset());
+					}
 				}
 			}
 		}

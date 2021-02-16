@@ -319,6 +319,32 @@ FProcHandle FMacPlatformProcess::CreateProcInternal(const TCHAR* URL, const TCHA
 		ProcessPath = FPaths::ConvertRelativePathToFull(ProcessPath);
 	}
 
+	// For programs that are wrapped in an App container
+	{
+		NSString* nsProcessPath = ProcessPath.GetNSString();
+		if (![[NSFileManager defaultManager] fileExistsAtPath: nsProcessPath])
+		{
+			NSString* AppName = [[nsProcessPath lastPathComponent] stringByDeletingPathExtension];
+			nsProcessPath = [[NSWorkspace sharedWorkspace] fullPathForApplication:AppName];
+		}
+		
+		if ([[NSFileManager defaultManager] fileExistsAtPath: nsProcessPath])
+		{
+			if([[NSWorkspace sharedWorkspace] isFilePackageAtPath: nsProcessPath])
+			{
+				NSBundle* Bundle = [NSBundle bundleWithPath:nsProcessPath];
+				if(Bundle != nil)
+				{
+					nsProcessPath = [Bundle executablePath];
+					if(nsProcessPath != nil)
+					{
+						ProcessPath = nsProcessPath;
+					}
+				}
+			}
+		}
+	}
+
 	if (!FPaths::FileExists(ProcessPath))
 	{
 		return FProcHandle();
@@ -505,6 +531,14 @@ FProcHandle FMacPlatformProcess::CreateProcInternal(const TCHAR* URL, const TCHA
 	if (PipeStdInChild)
 	{
 		posix_spawn_file_actions_adddup2(&FileActions, [(NSFileHandle*)PipeStdInChild fileDescriptor], STDIN_FILENO);
+	}
+
+	if (OptionalWorkingDirectory)
+	{
+		if (@available(macOS 10.15, *))
+		{
+			posix_spawn_file_actions_addchdir_np(&FileActions, TCHAR_TO_UTF8(OptionalWorkingDirectory));
+		}
 	}
 
 	posix_spawnattr_setflags(&SpawnAttr, SpawnFlags);

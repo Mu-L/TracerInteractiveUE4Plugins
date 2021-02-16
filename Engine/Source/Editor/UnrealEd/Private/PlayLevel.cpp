@@ -2104,8 +2104,13 @@ void UEditorEngine::EnableWorldSwitchCallbacks(bool bEnable)
 	{
 		// Set up a delegate to be called in Slate when GWorld needs to change.  Slate does not have direct access to the playworld to switch itself
 		FScopedConditionalWorldSwitcher::SwitchWorldForPIEDelegate = FOnSwitchWorldForPIE::CreateUObject(this, &UEditorEngine::OnSwitchWorldsForPIE);
-		ScriptExecutionStartHandle = FBlueprintContextTracker::OnEnterScriptContext.AddUObject(this, &UEditorEngine::OnScriptExecutionStart);
-		ScriptExecutionEndHandle = FBlueprintContextTracker::OnExitScriptContext.AddUObject(this, &UEditorEngine::OnScriptExecutionEnd);
+
+		if (!ScriptExecutionStartHandle.IsValid())
+		{
+			// This function can get called multiple times in multiplayer PIE
+			ScriptExecutionStartHandle = FBlueprintContextTracker::OnEnterScriptContext.AddUObject(this, &UEditorEngine::OnScriptExecutionStart);
+			ScriptExecutionEndHandle = FBlueprintContextTracker::OnExitScriptContext.AddUObject(this, &UEditorEngine::OnScriptExecutionEnd);
+		}
 	}
 	else
 	{
@@ -2115,15 +2120,20 @@ void UEditorEngine::EnableWorldSwitchCallbacks(bool bEnable)
 		// There should never be an active function context when pie is ending!
 		check(!FunctionStackWorldSwitcher);
 
-		FBlueprintContextTracker::OnEnterScriptContext.Remove(ScriptExecutionStartHandle);
-		FBlueprintContextTracker::OnExitScriptContext.Remove(ScriptExecutionEndHandle);
+		if (ScriptExecutionStartHandle.IsValid())
+		{
+			FBlueprintContextTracker::OnEnterScriptContext.Remove(ScriptExecutionStartHandle);
+			ScriptExecutionStartHandle.Reset();
+			FBlueprintContextTracker::OnExitScriptContext.Remove(ScriptExecutionEndHandle);
+			ScriptExecutionEndHandle.Reset();
+		}
 	}
 }
 
 void UEditorEngine::OnScriptExecutionStart(const FBlueprintContextTracker& ContextTracker, const UObject* ContextObject, const UFunction* ContextFunction)
 {
-	// Only do world switching for game thread callbacks, this is only bound at all in PIE so no need to check GIsEditor
-	if (IsInGameThread())
+	// Only do world switching for game thread callbacks when current world is set, this is only bound at all in PIE so no need to check GIsEditor
+	if (IsInGameThread() && GWorld)
 	{
 		// See if we should create a world switcher, which is true if we don't have one and our PIE info is missing
 		if (!FunctionStackWorldSwitcher && (!GIsPlayInEditorWorld || GPlayInEditorID == -1))
@@ -2425,7 +2435,8 @@ void UEditorEngine::StartPlayInEditorSession(FRequestPlaySessionParams& InReques
 	if (GEditor->IsTransactionActive())
 	{
 		FFormatNamedArguments Args;
-		Args.Add(TEXT("TransactionName"), GEditor->GetTransactionName());
+		FText TransactionName = GEditor->GetTransactionName();
+		Args.Add(TEXT("TransactionName"), TransactionName);
 		if (InRequestParams.WorldType == EPlaySessionWorldType::SimulateInEditor)
 		{
 			Args.Add(TEXT("PlaySession"), NSLOCTEXT("UnrealEd", "SimulatePlaySession", "Simulate"));
@@ -2443,7 +2454,7 @@ void UEditorEngine::StartPlayInEditorSession(FRequestPlaySessionParams& InReques
 		Info.bUseLargeFont = true;
 		FSlateNotificationManager::Get().AddNotification(Info);
 		GEditor->CancelTransaction(0);
-		UE_LOG(LogPlayLevel, Warning, TEXT("Cancelling Open Transaction '%s' to start PIE session."), *GEditor->GetTransactionName().ToString());
+		UE_LOG(LogPlayLevel, Warning, TEXT("Cancelling Open Transaction '%s' to start PIE session."), *TransactionName.ToString());
 	}
 
 	// Prompt the user that Matinee must be closed before PIE can occur. If they don't want
