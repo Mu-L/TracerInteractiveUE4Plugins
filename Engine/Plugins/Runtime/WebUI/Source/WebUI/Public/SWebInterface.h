@@ -14,7 +14,6 @@ class SWebBrowserView;
 class IWebBrowserAdapter;
 class IWebBrowserDialog;
 class IWebBrowserWindow;
-class FWebInterfaceSchemeHandlerFactory;
 struct FWebNavigationRequest;
 enum class EWebBrowserDialogEventResponse;
 
@@ -89,6 +88,8 @@ private:
 	bool HandleCloseWindow( const TWeakPtr<IWebBrowserWindow>& BrowserWindowPtr );
 
 protected:
+
+	static bool bPAK;
 
 	TSharedPtr<SWebBrowserView>   BrowserView;
 	TSharedPtr<IWebBrowserWindow> BrowserWindow;

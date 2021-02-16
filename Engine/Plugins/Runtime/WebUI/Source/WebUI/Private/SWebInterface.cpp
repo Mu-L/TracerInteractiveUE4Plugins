@@ -13,20 +13,6 @@
 #include "Input/Reply.h"
 #include "Widgets/Layout/SBorder.h"
 
-struct WebBrowserStatics
-{
-	WebBrowserStatics()
-	{
-		IWebBrowserSingleton* Singleton = IWebBrowserModule::Get().GetSingleton();
-		if ( Singleton )
-		{
-			Singleton->RegisterSchemeHandlerFactory( "pak", FString(), new FWebInterfaceSchemeHandlerFactory() );
-			Singleton->SetDevToolsShortcutEnabled( UE_BUILD_DEVELOPMENT || UE_BUILD_DEBUG );
-		}
-	}
-};
-static WebBrowserStatics WebBrowserStatics;
-
 SWebInterface::SWebInterface()
 {
 	bMouseTransparency          = false;
@@ -61,6 +47,7 @@ SWebInterface::~SWebInterface()
 #endif
 }
 
+bool SWebInterface::bPAK = false;
 void SWebInterface::Construct( const FArguments& InArgs )
 {
 	OnLoadCompleted     = InArgs._OnLoadCompleted;
@@ -93,7 +80,15 @@ void SWebInterface::Construct( const FArguments& InArgs )
 
 	IWebBrowserSingleton* Singleton = IWebBrowserModule::Get().GetSingleton();
 	if ( Singleton )
+	{
+		if ( !bPAK )
+		{
+			bPAK = Singleton->RegisterSchemeHandlerFactory( "pak", FString(), new FWebInterfaceSchemeHandlerFactory() );
+			Singleton->SetDevToolsShortcutEnabled( Settings.bShowErrorMessage );
+		}
+
 		BrowserWindow = Singleton->CreateBrowserWindow( Settings );
+	}
 
 	ChildSlot
 	[
