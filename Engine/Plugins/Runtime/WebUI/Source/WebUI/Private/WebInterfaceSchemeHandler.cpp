@@ -1,5 +1,6 @@
 // Copyright 2021 Tracer Interactive, LLC. All Rights Reserved.
 #include "WebInterfaceSchemeHandler.h"
+#if !UE_SERVER
 #include "GenericPlatform/GenericPlatformHttp.h"
 #include "HAL/FileManager.h"
 
@@ -121,3 +122,4 @@ TUniquePtr<IWebBrowserSchemeHandler> FWebInterfaceSchemeHandlerFactory::Create( 
 {
 	return MakeUnique<FWebInterfaceSchemeHandler>();
 }
+#endif

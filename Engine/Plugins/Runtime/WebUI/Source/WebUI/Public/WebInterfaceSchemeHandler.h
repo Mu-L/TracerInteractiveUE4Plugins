@@ -1,5 +1,6 @@
 // Copyright 2021 Tracer Interactive, LLC. All Rights Reserved.
 #pragma once
+#if !UE_SERVER
 #include "IWebBrowserSchemeHandler.h"
 
 class WEBUI_API FWebInterfaceSchemeHandler : public IWebBrowserSchemeHandler
@@ -29,3 +30,4 @@ class WEBUI_API FWebInterfaceSchemeHandlerFactory : public IWebBrowserSchemeHand
 {
 	virtual TUniquePtr<IWebBrowserSchemeHandler> Create( FString Verb, FString Url ) override;
 };
+#endif
