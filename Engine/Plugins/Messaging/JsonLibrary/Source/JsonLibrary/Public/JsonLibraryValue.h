@@ -43,6 +43,9 @@ public:
 	FJsonLibraryValue( const FDateTime& Value );
 	FJsonLibraryValue( const FGuid& Value );
 
+	FJsonLibraryValue( const FColor& Value );
+	FJsonLibraryValue( const FLinearColor& Value );
+
 	FJsonLibraryValue( const FRotator& Value );
 	FJsonLibraryValue( const FTransform& Value );
 	FJsonLibraryValue( const FVector& Value );
@@ -74,6 +77,11 @@ public:
 	FDateTime GetDateTime() const;
 	// Convert this value to a GUID.
 	FGuid GetGuid() const;
+
+	// Convert this value to a color.
+	FColor GetColor() const;
+	// Convert this value to a linear color.
+	FLinearColor GetLinearColor() const;
 
 	// Convert this value to a rotator.
 	FRotator GetRotator() const;
@@ -120,6 +128,11 @@ public:
 	bool IsDateTime() const;
 	// Check if this value is a GUID.
 	bool IsGuid() const;
+
+	// Check if this value is a color.
+	bool IsColor() const;
+	// Check if this value is a linear color.
+	bool IsLinearColor() const;
 
 	// Check if this value is a rotator.
 	bool IsRotator() const;

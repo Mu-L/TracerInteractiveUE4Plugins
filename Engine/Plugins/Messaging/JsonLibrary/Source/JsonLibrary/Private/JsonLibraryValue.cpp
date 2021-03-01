@@ -97,6 +97,17 @@ FJsonLibraryValue::FJsonLibraryValue( const FGuid& Value )
 	//
 }
 
+FJsonLibraryValue::FJsonLibraryValue( const FColor& Value )
+	: FJsonLibraryValue( "#" + Value.ToHex() )
+{
+	//
+}
+
+FJsonLibraryValue::FJsonLibraryValue( const FLinearColor& Value )
+{
+	JsonValue = FJsonLibraryObject( Value ).JsonObject;
+}
+
 FJsonLibraryValue::FJsonLibraryValue( const FRotator& Value )
 {
 	JsonValue = FJsonLibraryObject( Value ).JsonObject;
@@ -336,6 +347,25 @@ FGuid FJsonLibraryValue::GetGuid() const
 	return FGuid();
 }
 
+FColor FJsonLibraryValue::GetColor() const
+{
+	if ( !JsonValue.IsValid() || JsonValue->Type != EJson::String )
+		return FColor();
+
+	if ( IsColor() )
+		return FColor::FromHex( JsonValue->AsString() );
+
+	return FColor();
+}
+
+FLinearColor FJsonLibraryValue::GetLinearColor() const
+{
+	if ( GetType() == EJsonLibraryType::Object )
+		return GetObject().ToLinearColor();
+	
+	return FLinearColor();
+}
+
 FRotator FJsonLibraryValue::GetRotator() const
 {
 	if ( GetType() == EJsonLibraryType::Object )
@@ -560,6 +590,54 @@ bool FJsonLibraryValue::IsGuid() const
 	FGuid Guid;
 	if ( FGuid::Parse( JsonValue->AsString(), Guid ) )
 		return Guid.IsValid();
+
+	return false;
+}
+
+bool FJsonLibraryValue::IsColor() const
+{
+	if ( !JsonValue.IsValid() || JsonValue->Type != EJson::String )
+		return false;
+	
+	FString HexString = JsonValue->AsString();
+	if ( HexString.IsEmpty() )
+		return false;
+
+	int32 StartIndex = HexString[ 0 ] == TCHAR( '#' ) ? 1 : 0;
+	if ( HexString.Len() == 3 + StartIndex )
+	{
+		for ( int32 i = 0; i < 3; i++ )
+			if ( !FChar::IsHexDigit( HexString[ StartIndex++ ] ) )
+				return false;
+
+		return true;
+	}
+
+	if ( HexString.Len() == 6 + StartIndex )
+	{
+		for ( int32 i = 0; i < 6; i++ )
+			if ( !FChar::IsHexDigit( HexString[ StartIndex++ ] ) )
+				return false;
+
+		return true;
+	}
+
+	if ( HexString.Len() == 8 + StartIndex )
+	{
+		for ( int32 i = 0; i < 8; i++ )
+			if ( !FChar::IsHexDigit( HexString[ StartIndex++ ] ) )
+				return false;
+
+		return true;
+	}
+
+	return false;
+}
+
+bool FJsonLibraryValue::IsLinearColor() const
+{
+	if ( GetType() == EJsonLibraryType::Object )
+		return GetObject().IsLinearColor();
 
 	return false;
 }

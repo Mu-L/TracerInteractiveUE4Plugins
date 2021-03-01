@@ -27,6 +27,20 @@ FJsonLibraryObject::FJsonLibraryObject( const FJsonLibraryObjectNotify& Notify )
 	OnNotify = Notify;
 }
 
+FJsonLibraryObject::FJsonLibraryObject( const FLinearColor& Value )
+	: FJsonLibraryObject()
+{
+	TSharedPtr<FJsonObject> Json = SetJsonObject();
+	if ( Json.IsValid() )
+	{
+		Json->SetNumberField( "r", Value.R );
+		Json->SetNumberField( "g", Value.G );
+		Json->SetNumberField( "b", Value.B );
+		if ( Value.A != 1.0f )
+			Json->SetNumberField( "a", Value.A );
+	}
+}
+
 FJsonLibraryObject::FJsonLibraryObject( const FRotator& Value )
 	: FJsonLibraryObject()
 {
@@ -156,6 +170,28 @@ FJsonLibraryObject::FJsonLibraryObject( const TMap<FString, FGuid>& Value )
 	{
 		for ( const TPair<FString, FGuid>& Temp : Value )
 			Json->SetStringField( Temp.Key, Temp.Value.ToString( EGuidFormats::DigitsWithHyphens ) );
+	}
+}
+
+FJsonLibraryObject::FJsonLibraryObject( const TMap<FString, FColor>& Value )
+	: FJsonLibraryObject()
+{
+	TSharedPtr<FJsonObject> Json = SetJsonObject();
+	if ( Json.IsValid() )
+	{
+		for ( const TPair<FString, FColor>& Temp : Value )
+			Json->SetStringField( Temp.Key, "#" + Temp.Value.ToHex() );
+	}
+}
+
+FJsonLibraryObject::FJsonLibraryObject( const TMap<FString, FLinearColor>& Value )
+	: FJsonLibraryObject()
+{
+	TSharedPtr<FJsonObject> Json = SetJsonObject();
+	if ( Json.IsValid() )
+	{
+		for ( const TPair<FString, FLinearColor>& Temp : Value )
+			Json->SetField( Temp.Key, FJsonLibraryObject( Temp.Value ).JsonObject );
 	}
 }
 
@@ -300,6 +336,18 @@ void FJsonLibraryObject::AddGuidMap( const TMap<FString, FGuid>& Map )
 		SetValue( Temp.Key, FJsonLibraryValue( Temp.Value ) );
 }
 
+void FJsonLibraryObject::AddColorMap( const TMap<FString, FColor>& Map )
+{
+	for ( const TPair<FString, FColor>& Temp : Map )
+		SetValue( Temp.Key, FJsonLibraryValue( Temp.Value ) );
+}
+
+void FJsonLibraryObject::AddLinearColorMap( const TMap<FString, FLinearColor>& Map )
+{
+	for ( const TPair<FString, FLinearColor>& Temp : Map )
+		SetValue( Temp.Key, FJsonLibraryValue( Temp.Value ) );
+}
+
 void FJsonLibraryObject::AddRotatorMap( const TMap<FString, FRotator>& Map )
 {
 	for ( const TPair<FString, FRotator>& Temp : Map )
@@ -379,6 +427,16 @@ FGuid FJsonLibraryObject::GetGuid( const FString& Key ) const
 	return GetValue( Key ).GetGuid();
 }
 
+FColor FJsonLibraryObject::GetColor( const FString& Key ) const
+{
+	return GetValue( Key ).GetColor();
+}
+
+FLinearColor FJsonLibraryObject::GetLinearColor( const FString& Key ) const
+{
+	return GetValue( Key ).GetLinearColor();
+}
+
 FRotator FJsonLibraryObject::GetRotator( const FString& Key ) const
 {
 	return GetValue( Key ).GetRotator();
@@ -454,6 +512,16 @@ void FJsonLibraryObject::SetDateTime( const FString& Key, const FDateTime& Value
 }
 
 void FJsonLibraryObject::SetGuid( const FString& Key, const FGuid& Value )
+{
+	SetValue( Key, FJsonLibraryValue( Value ) );
+}
+
+void FJsonLibraryObject::SetColor( const FString& Key, const FColor& Value )
+{
+	SetValue( Key, FJsonLibraryValue( Value ) );
+}
+
+void FJsonLibraryObject::SetLinearColor( const FString& Key, const FLinearColor& Value )
 {
 	SetValue( Key, FJsonLibraryValue( Value ) );
 }
@@ -682,6 +750,25 @@ bool FJsonLibraryObject::IsEmpty() const
 	return Json->Values.Num() == 0;
 }
 
+bool FJsonLibraryObject::IsLinearColor() const
+{
+	int32 Keys = Count();
+	if ( Keys < 3 || Keys > 4 )
+		return false;
+
+	if ( !HasKey( "r" )
+	  || !HasKey( "g" )
+	  || !HasKey( "b" ) )
+		return false;
+
+	if ( Keys == 3 )
+		return true;
+	if ( Keys == 4 && HasKey( "a" ) )
+		return true;
+	
+	return false;
+}
+
 bool FJsonLibraryObject::IsRotator() const
 {
 	if ( Count() != 3 )
@@ -768,6 +855,17 @@ FString FJsonLibraryObject::Stringify() const
 		return Text;
 
 	return FString();
+}
+
+FLinearColor FJsonLibraryObject::ToLinearColor() const
+{
+	if ( !IsLinearColor() )
+		return FLinearColor();
+	
+	return FLinearColor( GetFloat( "r" ),
+					     GetFloat( "g" ),
+					     GetFloat( "b" ),
+					     HasKey( "a" ) ? GetFloat( "a" ) : 1.0f );
 }
 
 FRotator FJsonLibraryObject::ToRotator() const
@@ -923,6 +1021,34 @@ TMap<FString, FGuid> FJsonLibraryObject::ToGuidMap() const
 
 	for ( const TPair<FString, TSharedPtr<FJsonValue>>& Temp : Json->Values )
 		Map.Add( Temp.Key, FJsonLibraryValue( Temp.Value ).GetGuid() );
+
+	return Map;
+}
+
+TMap<FString, FColor> FJsonLibraryObject::ToColorMap() const
+{
+	const TSharedPtr<FJsonObject> Json = GetJsonObject();
+
+	TMap<FString, FColor> Map;
+	if ( !Json.IsValid() )
+		return Map;
+
+	for ( const TPair<FString, TSharedPtr<FJsonValue>>& Temp : Json->Values )
+		Map.Add( Temp.Key, FJsonLibraryValue( Temp.Value ).GetColor() );
+
+	return Map;
+}
+
+TMap<FString, FLinearColor> FJsonLibraryObject::ToLinearColorMap() const
+{
+	const TSharedPtr<FJsonObject> Json = GetJsonObject();
+
+	TMap<FString, FLinearColor> Map;
+	if ( !Json.IsValid() )
+		return Map;
+
+	for ( const TPair<FString, TSharedPtr<FJsonValue>>& Temp : Json->Values )
+		Map.Add( Temp.Key, FJsonLibraryValue( Temp.Value ).GetLinearColor() );
 
 	return Map;
 }

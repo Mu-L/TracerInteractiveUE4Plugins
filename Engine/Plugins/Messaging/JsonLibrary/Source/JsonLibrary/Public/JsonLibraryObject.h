@@ -31,6 +31,8 @@ public:
 	FJsonLibraryObject();
 	FJsonLibraryObject( const FJsonLibraryObjectNotify& Notify );
 
+	FJsonLibraryObject( const FLinearColor& Value );
+
 	FJsonLibraryObject( const FRotator& Value );
 	FJsonLibraryObject( const FTransform& Value );
 	FJsonLibraryObject( const FVector& Value );
@@ -44,6 +46,9 @@ public:
 
 	FJsonLibraryObject( const TMap<FString, FDateTime>& Value );
 	FJsonLibraryObject( const TMap<FString, FGuid>& Value );
+
+	FJsonLibraryObject( const TMap<FString, FColor>& Value );
+	FJsonLibraryObject( const TMap<FString, FLinearColor>& Value );
 
 	FJsonLibraryObject( const TMap<FString, FRotator>& Value );
 	FJsonLibraryObject( const TMap<FString, FTransform>& Value );
@@ -81,6 +86,11 @@ public:
 	// Add a map of GUIDs to this object.
 	void AddGuidMap( const TMap<FString, FGuid>& Map );
 
+	// Add a map of colors to this object.
+	void AddColorMap( const TMap<FString, FColor>& Map );
+	// Add a map of linear colors to this object.
+	void AddLinearColorMap( const TMap<FString, FLinearColor>& Map );
+
 	// Add a map of rotators to this object.
 	void AddRotatorMap( const TMap<FString, FRotator>& Map );
 	// Add a map of transforms to this object.
@@ -108,6 +118,11 @@ public:
 	FDateTime GetDateTime( const FString& Key ) const;
 	// Get a property as a GUID.
 	FGuid GetGuid( const FString& Key ) const;
+
+	// Get a property as a color.
+	FColor GetColor( const FString& Key ) const;
+	// Get a property as a linear color.
+	FLinearColor GetLinearColor( const FString& Key ) const;
 
 	// Get a property as a rotator.
 	FRotator GetRotator( const FString& Key ) const;
@@ -143,6 +158,11 @@ public:
 	void SetDateTime( const FString& Key, const FDateTime& Value );
 	// Set a property as a GUID.
 	void SetGuid( const FString& Key, const FGuid& Value );
+
+	// Set a property as a color.
+	void SetColor( const FString& Key, const FColor& Value );
+	// Set a property as a linear color.
+	void SetLinearColor( const FString& Key, const FLinearColor& Value );
 
 	// Set a property as a rotator.
 	void SetRotator( const FString& Key, const FRotator& Value );
@@ -194,6 +214,9 @@ public:
 	// Check if this object is empty.
 	bool IsEmpty() const;
 
+	// Check if this object is a linear color.
+	bool IsLinearColor() const;
+
 	// Check if this object is a rotator.
 	bool IsRotator() const;
 	// Check if this object is a transform.
@@ -208,6 +231,9 @@ public:
 
 	// Stringify this object as a JSON string.
 	FString Stringify() const;
+
+	// Convert this object to a linear color.
+	FLinearColor ToLinearColor() const;
 
 	// Convert this object to a rotator.
 	FRotator ToRotator() const;
@@ -234,6 +260,11 @@ public:
 	TMap<FString, FDateTime> ToDateTimeMap() const;
 	// Copy a JSON object to a map of GUIDs.
 	TMap<FString, FGuid> ToGuidMap() const;
+
+	// Copy a JSON object to a map of colors.
+	TMap<FString, FColor> ToColorMap() const;
+	// Copy a JSON object to a map of linear colors.
+	TMap<FString, FLinearColor> ToLinearColorMap() const;
 
 	// Copy a JSON object to a map of rotators.
 	TMap<FString, FRotator> ToRotatorMap() const;

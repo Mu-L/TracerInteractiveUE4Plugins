@@ -115,6 +115,28 @@ FJsonLibraryList::FJsonLibraryList( const TArray<FGuid>& Value )
 	}
 }
 
+FJsonLibraryList::FJsonLibraryList( const TArray<FColor>& Value )
+	: FJsonLibraryList()
+{
+	TArray<TSharedPtr<FJsonValue>>* Json = SetJsonArray();
+	if ( Json )
+	{
+		for ( int32 i = 0; i < Value.Num(); i++ )
+			Json->Add( FJsonLibraryValue( Value[ i ] ).JsonValue );
+	}
+}
+
+FJsonLibraryList::FJsonLibraryList( const TArray<FLinearColor>& Value )
+	: FJsonLibraryList()
+{
+	TArray<TSharedPtr<FJsonValue>>* Json = SetJsonArray();
+	if ( Json )
+	{
+		for ( int32 i = 0; i < Value.Num(); i++ )
+			Json->Add( FJsonLibraryValue( Value[ i ] ).JsonValue );
+	}
+}
+
 FJsonLibraryList::FJsonLibraryList( const TArray<FRotator>& Value )
 	: FJsonLibraryList()
 {
@@ -282,6 +304,18 @@ void FJsonLibraryList::AppendGuidArray( const TArray<FGuid>& Array )
 		AddValue( FJsonLibraryValue( Array[ i ] ) );
 }
 
+void FJsonLibraryList::AppendColorArray( const TArray<FColor>& Array )
+{
+	for ( int32 i = 0; i < Array.Num(); i++ )
+		AddValue( FJsonLibraryValue( Array[ i ] ) );
+}
+
+void FJsonLibraryList::AppendLinearColorArray( const TArray<FLinearColor>& Array )
+{
+	for ( int32 i = 0; i < Array.Num(); i++ )
+		AddValue( FJsonLibraryValue( Array[ i ] ) );
+}
+
 void FJsonLibraryList::AppendRotatorArray( const TArray<FRotator>& Array )
 {
 	for ( int32 i = 0; i < Array.Num(); i++ )
@@ -367,6 +401,18 @@ void FJsonLibraryList::InjectGuidArray( int32 Index, const TArray<FGuid>& Array 
 		InsertValue( Index + i, FJsonLibraryValue( Array[ i ] ) );
 }
 
+void FJsonLibraryList::InjectColorArray( int32 Index, const TArray<FColor>& Array )
+{
+	for ( int32 i = 0; i < Array.Num(); i++ )
+		InsertValue( Index + i, FJsonLibraryValue( Array[ i ] ) );
+}
+
+void FJsonLibraryList::InjectLinearColorArray( int32 Index, const TArray<FLinearColor>& Array )
+{
+	for ( int32 i = 0; i < Array.Num(); i++ )
+		InsertValue( Index + i, FJsonLibraryValue( Array[ i ] ) );
+}
+
 void FJsonLibraryList::InjectRotatorArray( int32 Index, const TArray<FRotator>& Array )
 {
 	for ( int32 i = 0; i < Array.Num(); i++ )
@@ -422,6 +468,16 @@ void FJsonLibraryList::AddDateTime( const FDateTime& Value )
 }
 
 void FJsonLibraryList::AddGuid( const FGuid& Value )
+{
+	AddValue( FJsonLibraryValue( Value ) );
+}
+
+void FJsonLibraryList::AddColor( const FColor& Value )
+{
+	AddValue( FJsonLibraryValue( Value ) );
+}
+
+void FJsonLibraryList::AddLinearColor( const FLinearColor& Value )
 {
 	AddValue( FJsonLibraryValue( Value ) );
 }
@@ -507,6 +563,16 @@ void FJsonLibraryList::InsertGuid( int32 Index, const FGuid& Value )
 	InsertValue( Index, FJsonLibraryValue( Value ) );
 }
 
+void FJsonLibraryList::InsertColor( int32 Index, const FColor& Value )
+{
+	InsertValue( Index, FJsonLibraryValue( Value ) );
+}
+
+void FJsonLibraryList::InsertLinearColor( int32 Index, const FLinearColor& Value )
+{
+	InsertValue( Index, FJsonLibraryValue( Value ) );
+}
+
 void FJsonLibraryList::InsertRotator( int32 Index, const FRotator& Value )
 {
 	InsertValue( Index, FJsonLibraryValue( Value ) );
@@ -587,6 +653,16 @@ FGuid FJsonLibraryList::GetGuid( int32 Index ) const
 	return GetValue( Index ).GetGuid();
 }
 
+FColor FJsonLibraryList::GetColor( int32 Index ) const
+{
+	return GetValue( Index ).GetColor();
+}
+
+FLinearColor FJsonLibraryList::GetLinearColor( int32 Index ) const
+{
+	return GetValue( Index ).GetLinearColor();
+}
+
 FRotator FJsonLibraryList::GetRotator( int32 Index ) const
 {
 	return GetValue( Index ).GetRotator();
@@ -662,6 +738,16 @@ void FJsonLibraryList::SetDateTime( int32 Index, const FDateTime& Value )
 }
 
 void FJsonLibraryList::SetGuid( int32 Index, const FGuid& Value )
+{
+	SetValue( Index, FJsonLibraryValue( Value ) );
+}
+
+void FJsonLibraryList::SetColor( int32 Index, const FColor& Value )
+{
+	SetValue( Index, FJsonLibraryValue( Value ) );
+}
+
+void FJsonLibraryList::SetLinearColor( int32 Index, const FLinearColor& Value )
 {
 	SetValue( Index, FJsonLibraryValue( Value ) );
 }
@@ -829,6 +915,42 @@ void FJsonLibraryList::RemoveGuid( const FGuid& Value )
 			continue;
 		
 		if ( Guid == Value )
+		{
+			NotifyCheck( i );
+			Json->RemoveAt( i );
+			NotifyRemove( i );
+		}
+	}
+}
+
+void FJsonLibraryList::RemoveColor( const FColor& Value )
+{
+	TArray<TSharedPtr<FJsonValue>>* Json = SetJsonArray();
+	if ( !Json )
+		return;
+
+	for ( int32 i = Json->Num() - 1; i >= 0; i-- )
+	{
+		const FJsonLibraryValue Item = ( *Json )[ i ];
+		if ( Item.IsColor() && Item.GetColor() == Value )
+		{
+			NotifyCheck( i );
+			Json->RemoveAt( i );
+			NotifyRemove( i );
+		}
+	}
+}
+
+void FJsonLibraryList::RemoveLinearColor( const FLinearColor& Value )
+{
+	TArray<TSharedPtr<FJsonValue>>* Json = SetJsonArray();
+	if ( !Json )
+		return;
+
+	for ( int32 i = Json->Num() - 1; i >= 0; i-- )
+	{
+		const FJsonLibraryValue Item = ( *Json )[ i ];
+		if ( Item.IsLinearColor() && Item.GetLinearColor() == Value )
 		{
 			NotifyCheck( i );
 			Json->RemoveAt( i );
@@ -1016,6 +1138,38 @@ int32 FJsonLibraryList::FindGuid( const FGuid& Value, int32 Index ) const
 			continue;
 		
 		if ( Guid == Value )
+			return i;
+	}
+
+	return -1;
+}
+
+int32 FJsonLibraryList::FindColor( const FColor& Value, int32 Index ) const
+{
+	const TArray<TSharedPtr<FJsonValue>>* Json = GetJsonArray();
+	if ( !Json )
+		return -1;
+
+	for ( int32 i = Index; i < Json->Num(); i++ )
+	{
+		const FJsonLibraryValue Item = ( *Json )[ i ];
+		if ( Item.IsColor() && Item.GetColor() == Value )
+			return i;
+	}
+
+	return -1;
+}
+
+int32 FJsonLibraryList::FindLinearColor( const FLinearColor& Value, int32 Index ) const
+{
+	const TArray<TSharedPtr<FJsonValue>>* Json = GetJsonArray();
+	if ( !Json )
+		return -1;
+
+	for ( int32 i = Index; i < Json->Num(); i++ )
+	{
+		const FJsonLibraryValue Item = ( *Json )[ i ];
+		if ( Item.IsLinearColor() && Item.GetLinearColor() == Value )
 			return i;
 	}
 
@@ -1424,6 +1578,34 @@ TArray<FGuid> FJsonLibraryList::ToGuidArray() const
 
 	for ( int32 i = 0; i < Json->Num(); i++ )
 		Array.Add( FJsonLibraryValue( ( *Json )[ i ] ).GetGuid() );
+
+	return Array;
+}
+
+TArray<FColor> FJsonLibraryList::ToColorArray() const
+{
+	const TArray<TSharedPtr<FJsonValue>>* Json = GetJsonArray();
+
+	TArray<FColor> Array;
+	if ( !Json )
+		return Array;
+
+	for ( int32 i = 0; i < Json->Num(); i++ )
+		Array.Add( FJsonLibraryValue( ( *Json )[ i ] ).GetColor() );
+
+	return Array;
+}
+
+TArray<FLinearColor> FJsonLibraryList::ToLinearColorArray() const
+{
+	const TArray<TSharedPtr<FJsonValue>>* Json = GetJsonArray();
+
+	TArray<FLinearColor> Array;
+	if ( !Json )
+		return Array;
+
+	for ( int32 i = 0; i < Json->Num(); i++ )
+		Array.Add( FJsonLibraryValue( ( *Json )[ i ] ).GetLinearColor() );
 
 	return Array;
 }
