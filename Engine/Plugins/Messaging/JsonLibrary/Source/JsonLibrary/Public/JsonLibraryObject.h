@@ -42,6 +42,9 @@ public:
 	FJsonLibraryObject( const TMap<FString, int32>& Value );
 	FJsonLibraryObject( const TMap<FString, FString>& Value );
 
+	FJsonLibraryObject( const TMap<FString, FDateTime>& Value );
+	FJsonLibraryObject( const TMap<FString, FGuid>& Value );
+
 	FJsonLibraryObject( const TMap<FString, FRotator>& Value );
 	FJsonLibraryObject( const TMap<FString, FTransform>& Value );
 	FJsonLibraryObject( const TMap<FString, FVector>& Value );
@@ -73,6 +76,11 @@ public:
 	// Add a map of strings to this object.
 	void AddStringMap( const TMap<FString, FString>& Map );
 
+	// Add a map of date/times to this object.
+	void AddDateTimeMap( const TMap<FString, FDateTime>& Map );
+	// Add a map of GUIDs to this object.
+	void AddGuidMap( const TMap<FString, FGuid>& Map );
+
 	// Add a map of rotators to this object.
 	void AddRotatorMap( const TMap<FString, FRotator>& Map );
 	// Add a map of transforms to this object.
@@ -95,6 +103,11 @@ public:
 	double GetNumber( const FString& Key ) const;
 	// Get a property as a string.
 	FString GetString( const FString& Key ) const;
+
+	// Get a property as a date/time.
+	FDateTime GetDateTime( const FString& Key ) const;
+	// Get a property as a GUID.
+	FGuid GetGuid( const FString& Key ) const;
 
 	// Get a property as a rotator.
 	FRotator GetRotator( const FString& Key ) const;
@@ -125,6 +138,11 @@ public:
 	void SetNumber( const FString& Key, double Value );
 	// Set a property as a string.
 	void SetString( const FString& Key, const FString& Value );
+
+	// Set a property as a date/time.
+	void SetDateTime( const FString& Key, const FDateTime& Value );
+	// Set a property as a GUID.
+	void SetGuid( const FString& Key, const FGuid& Value );
 
 	// Set a property as a rotator.
 	void SetRotator( const FString& Key, const FRotator& Value );
@@ -211,6 +229,11 @@ public:
 	TMap<FString, double> ToNumberMap() const;
 	// Copy a JSON object to a map of strings.
 	TMap<FString, FString> ToStringMap() const;
+
+	// Copy a JSON object to a map of date/times.
+	TMap<FString, FDateTime> ToDateTimeMap() const;
+	// Copy a JSON object to a map of GUIDs.
+	TMap<FString, FGuid> ToGuidMap() const;
 
 	// Copy a JSON object to a map of rotators.
 	TMap<FString, FRotator> ToRotatorMap() const;

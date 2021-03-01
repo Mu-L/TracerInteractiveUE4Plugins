@@ -137,6 +137,28 @@ FJsonLibraryObject::FJsonLibraryObject( const TMap<FString, FString>& Value )
 	}
 }
 
+FJsonLibraryObject::FJsonLibraryObject( const TMap<FString, FDateTime>& Value )
+	: FJsonLibraryObject()
+{
+	TSharedPtr<FJsonObject> Json = SetJsonObject();
+	if ( Json.IsValid() )
+	{
+		for ( const TPair<FString, FDateTime>& Temp : Value )
+			Json->SetStringField( Temp.Key, Temp.Value.ToIso8601() );
+	}
+}
+
+FJsonLibraryObject::FJsonLibraryObject( const TMap<FString, FGuid>& Value )
+	: FJsonLibraryObject()
+{
+	TSharedPtr<FJsonObject> Json = SetJsonObject();
+	if ( Json.IsValid() )
+	{
+		for ( const TPair<FString, FGuid>& Temp : Value )
+			Json->SetStringField( Temp.Key, Temp.Value.ToString( EGuidFormats::DigitsWithHyphens ) );
+	}
+}
+
 FJsonLibraryObject::FJsonLibraryObject( const TMap<FString, FRotator>& Value )
 	: FJsonLibraryObject()
 {
@@ -266,6 +288,18 @@ void FJsonLibraryObject::AddStringMap( const TMap<FString, FString>& Map )
 		SetValue( Temp.Key, FJsonLibraryValue( Temp.Value ) );
 }
 
+void FJsonLibraryObject::AddDateTimeMap( const TMap<FString, FDateTime>& Map )
+{
+	for ( const TPair<FString, FDateTime>& Temp : Map )
+		SetValue( Temp.Key, FJsonLibraryValue( Temp.Value ) );
+}
+
+void FJsonLibraryObject::AddGuidMap( const TMap<FString, FGuid>& Map )
+{
+	for ( const TPair<FString, FGuid>& Temp : Map )
+		SetValue( Temp.Key, FJsonLibraryValue( Temp.Value ) );
+}
+
 void FJsonLibraryObject::AddRotatorMap( const TMap<FString, FRotator>& Map )
 {
 	for ( const TPair<FString, FRotator>& Temp : Map )
@@ -335,6 +369,16 @@ FString FJsonLibraryObject::GetString( const FString& Key ) const
 	return GetValue( Key ).GetString();
 }
 
+FDateTime FJsonLibraryObject::GetDateTime( const FString& Key ) const
+{
+	return GetValue( Key ).GetDateTime();
+}
+
+FGuid FJsonLibraryObject::GetGuid( const FString& Key ) const
+{
+	return GetValue( Key ).GetGuid();
+}
+
 FRotator FJsonLibraryObject::GetRotator( const FString& Key ) const
 {
 	return GetValue( Key ).GetRotator();
@@ -400,6 +444,16 @@ void FJsonLibraryObject::SetNumber( const FString& Key, double Value )
 }
 
 void FJsonLibraryObject::SetString( const FString& Key, const FString& Value )
+{
+	SetValue( Key, FJsonLibraryValue( Value ) );
+}
+
+void FJsonLibraryObject::SetDateTime( const FString& Key, const FDateTime& Value )
+{
+	SetValue( Key, FJsonLibraryValue( Value ) );
+}
+
+void FJsonLibraryObject::SetGuid( const FString& Key, const FGuid& Value )
 {
 	SetValue( Key, FJsonLibraryValue( Value ) );
 }
@@ -841,6 +895,34 @@ TMap<FString, FString> FJsonLibraryObject::ToStringMap() const
 
 	for ( const TPair<FString, TSharedPtr<FJsonValue>>& Temp : Json->Values )
 		Map.Add( Temp.Key, FJsonLibraryValue( Temp.Value ).GetString() );
+
+	return Map;
+}
+
+TMap<FString, FDateTime> FJsonLibraryObject::ToDateTimeMap() const
+{
+	const TSharedPtr<FJsonObject> Json = GetJsonObject();
+
+	TMap<FString, FDateTime> Map;
+	if ( !Json.IsValid() )
+		return Map;
+
+	for ( const TPair<FString, TSharedPtr<FJsonValue>>& Temp : Json->Values )
+		Map.Add( Temp.Key, FJsonLibraryValue( Temp.Value ).GetDateTime() );
+
+	return Map;
+}
+
+TMap<FString, FGuid> FJsonLibraryObject::ToGuidMap() const
+{
+	const TSharedPtr<FJsonObject> Json = GetJsonObject();
+
+	TMap<FString, FGuid> Map;
+	if ( !Json.IsValid() )
+		return Map;
+
+	for ( const TPair<FString, TSharedPtr<FJsonValue>>& Temp : Json->Values )
+		Map.Add( Temp.Key, FJsonLibraryValue( Temp.Value ).GetGuid() );
 
 	return Map;
 }

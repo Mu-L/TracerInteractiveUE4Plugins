@@ -93,6 +93,28 @@ FJsonLibraryList::FJsonLibraryList( const TArray<FString>& Value )
 	}
 }
 
+FJsonLibraryList::FJsonLibraryList( const TArray<FDateTime>& Value )
+	: FJsonLibraryList()
+{
+	TArray<TSharedPtr<FJsonValue>>* Json = SetJsonArray();
+	if ( Json )
+	{
+		for ( int32 i = 0; i < Value.Num(); i++ )
+			Json->Add( FJsonLibraryValue( Value[ i ] ).JsonValue );
+	}
+}
+
+FJsonLibraryList::FJsonLibraryList( const TArray<FGuid>& Value )
+	: FJsonLibraryList()
+{
+	TArray<TSharedPtr<FJsonValue>>* Json = SetJsonArray();
+	if ( Json )
+	{
+		for ( int32 i = 0; i < Value.Num(); i++ )
+			Json->Add( FJsonLibraryValue( Value[ i ] ).JsonValue );
+	}
+}
+
 FJsonLibraryList::FJsonLibraryList( const TArray<FRotator>& Value )
 	: FJsonLibraryList()
 {
@@ -248,6 +270,18 @@ void FJsonLibraryList::AppendStringArray( const TArray<FString>& Array )
 		AddValue( FJsonLibraryValue( Array[ i ] ) );
 }
 
+void FJsonLibraryList::AppendDateTimeArray( const TArray<FDateTime>& Array )
+{
+	for ( int32 i = 0; i < Array.Num(); i++ )
+		AddValue( FJsonLibraryValue( Array[ i ] ) );
+}
+
+void FJsonLibraryList::AppendGuidArray( const TArray<FGuid>& Array )
+{
+	for ( int32 i = 0; i < Array.Num(); i++ )
+		AddValue( FJsonLibraryValue( Array[ i ] ) );
+}
+
 void FJsonLibraryList::AppendRotatorArray( const TArray<FRotator>& Array )
 {
 	for ( int32 i = 0; i < Array.Num(); i++ )
@@ -321,6 +355,18 @@ void FJsonLibraryList::InjectStringArray( int32 Index, const TArray<FString>& Ar
 		InsertValue( Index + i, FJsonLibraryValue( Array[ i ] ) );
 }
 
+void FJsonLibraryList::InjectDateTimeArray( int32 Index, const TArray<FDateTime>& Array )
+{
+	for ( int32 i = 0; i < Array.Num(); i++ )
+		InsertValue( Index + i, FJsonLibraryValue( Array[ i ] ) );
+}
+
+void FJsonLibraryList::InjectGuidArray( int32 Index, const TArray<FGuid>& Array )
+{
+	for ( int32 i = 0; i < Array.Num(); i++ )
+		InsertValue( Index + i, FJsonLibraryValue( Array[ i ] ) );
+}
+
 void FJsonLibraryList::InjectRotatorArray( int32 Index, const TArray<FRotator>& Array )
 {
 	for ( int32 i = 0; i < Array.Num(); i++ )
@@ -366,6 +412,16 @@ void FJsonLibraryList::AddNumber( double Value )
 }
 
 void FJsonLibraryList::AddString( const FString& Value )
+{
+	AddValue( FJsonLibraryValue( Value ) );
+}
+
+void FJsonLibraryList::AddDateTime( const FDateTime& Value )
+{
+	AddValue( FJsonLibraryValue( Value ) );
+}
+
+void FJsonLibraryList::AddGuid( const FGuid& Value )
 {
 	AddValue( FJsonLibraryValue( Value ) );
 }
@@ -441,6 +497,16 @@ void FJsonLibraryList::InsertString( int32 Index, const FString& Value )
 	InsertValue( Index, FJsonLibraryValue( Value ) );
 }
 
+void FJsonLibraryList::InsertDateTime( int32 Index, const FDateTime& Value )
+{
+	InsertValue( Index, FJsonLibraryValue( Value ) );
+}
+
+void FJsonLibraryList::InsertGuid( int32 Index, const FGuid& Value )
+{
+	InsertValue( Index, FJsonLibraryValue( Value ) );
+}
+
 void FJsonLibraryList::InsertRotator( int32 Index, const FRotator& Value )
 {
 	InsertValue( Index, FJsonLibraryValue( Value ) );
@@ -511,6 +577,16 @@ FString FJsonLibraryList::GetString( int32 Index ) const
 	return GetValue( Index ).GetString();
 }
 
+FDateTime FJsonLibraryList::GetDateTime( int32 Index ) const
+{
+	return GetValue( Index ).GetDateTime();
+}
+
+FGuid FJsonLibraryList::GetGuid( int32 Index ) const
+{
+	return GetValue( Index ).GetGuid();
+}
+
 FRotator FJsonLibraryList::GetRotator( int32 Index ) const
 {
 	return GetValue( Index ).GetRotator();
@@ -576,6 +652,16 @@ void FJsonLibraryList::SetNumber( int32 Index, double Value )
 }
 
 void FJsonLibraryList::SetString( int32 Index, const FString& Value )
+{
+	SetValue( Index, FJsonLibraryValue( Value ) );
+}
+
+void FJsonLibraryList::SetDateTime( int32 Index, const FDateTime& Value )
+{
+	SetValue( Index, FJsonLibraryValue( Value ) );
+}
+
+void FJsonLibraryList::SetGuid( int32 Index, const FGuid& Value )
 {
 	SetValue( Index, FJsonLibraryValue( Value ) );
 }
@@ -693,6 +779,56 @@ void FJsonLibraryList::RemoveString( const FString& Value )
 	{
 		const TSharedPtr<FJsonValue>& Item = ( *Json )[ i ];
 		if ( Item.IsValid() && Item->Type == EJson::String && Item->AsString() == Value )
+		{
+			NotifyCheck( i );
+			Json->RemoveAt( i );
+			NotifyRemove( i );
+		}
+	}
+}
+
+void FJsonLibraryList::RemoveDateTime( const FDateTime& Value )
+{
+	TArray<TSharedPtr<FJsonValue>>* Json = SetJsonArray();
+	if ( !Json )
+		return;
+
+	for ( int32 i = Json->Num() - 1; i >= 0; i-- )
+	{
+		const TSharedPtr<FJsonValue>& Item = ( *Json )[ i ];
+		if ( !Item.IsValid() || Item->Type != EJson::String )
+			continue;
+
+		FDateTime DateTime;
+		if ( !FDateTime::ParseIso8601( *Item->AsString(), DateTime ) )
+			continue;
+		
+		if ( DateTime == Value )
+		{
+			NotifyCheck( i );
+			Json->RemoveAt( i );
+			NotifyRemove( i );
+		}
+	}
+}
+
+void FJsonLibraryList::RemoveGuid( const FGuid& Value )
+{
+	TArray<TSharedPtr<FJsonValue>>* Json = SetJsonArray();
+	if ( !Json )
+		return;
+
+	for ( int32 i = Json->Num() - 1; i >= 0; i-- )
+	{
+		const TSharedPtr<FJsonValue>& Item = ( *Json )[ i ];
+		if ( !Item.IsValid() || Item->Type != EJson::String )
+			continue;
+
+		FGuid Guid;
+		if ( !FGuid::Parse( Item->AsString(), Guid ) )
+			continue;
+		
+		if ( Guid == Value )
 		{
 			NotifyCheck( i );
 			Json->RemoveAt( i );
@@ -834,6 +970,52 @@ int32 FJsonLibraryList::FindString( const FString& Value, int32 Index ) const
 	{
 		const TSharedPtr<FJsonValue>& Item = ( *Json )[ i ];
 		if ( Item.IsValid() && Item->Type == EJson::String && Item->AsString() == Value )
+			return i;
+	}
+
+	return -1;
+}
+
+int32 FJsonLibraryList::FindDateTime( const FDateTime& Value, int32 Index ) const
+{
+	const TArray<TSharedPtr<FJsonValue>>* Json = GetJsonArray();
+	if ( !Json )
+		return -1;
+
+	for ( int32 i = Index; i < Json->Num(); i++ )
+	{
+		const TSharedPtr<FJsonValue>& Item = ( *Json )[ i ];
+		if ( !Item.IsValid() || Item->Type != EJson::String )
+			continue;
+		
+		FDateTime DateTime;
+		if ( !FDateTime::ParseIso8601( *Item->AsString(), DateTime ) )
+			continue;
+		
+		if ( DateTime == Value )
+			return i;
+	}
+
+	return -1;
+}
+
+int32 FJsonLibraryList::FindGuid( const FGuid& Value, int32 Index ) const
+{
+	const TArray<TSharedPtr<FJsonValue>>* Json = GetJsonArray();
+	if ( !Json )
+		return -1;
+
+	for ( int32 i = Index; i < Json->Num(); i++ )
+	{
+		const TSharedPtr<FJsonValue>& Item = ( *Json )[ i ];
+		if ( !Item.IsValid() || Item->Type != EJson::String )
+			continue;
+		
+		FGuid Guid;
+		if ( !FGuid::Parse( Item->AsString(), Guid ) )
+			continue;
+		
+		if ( Guid == Value )
 			return i;
 	}
 
@@ -1214,6 +1396,34 @@ TArray<FString> FJsonLibraryList::ToStringArray() const
 
 	for ( int32 i = 0; i < Json->Num(); i++ )
 		Array.Add( FJsonLibraryValue( ( *Json )[ i ] ).GetString() );
+
+	return Array;
+}
+
+TArray<FDateTime> FJsonLibraryList::ToDateTimeArray() const
+{
+	const TArray<TSharedPtr<FJsonValue>>* Json = GetJsonArray();
+
+	TArray<FDateTime> Array;
+	if ( !Json )
+		return Array;
+
+	for ( int32 i = 0; i < Json->Num(); i++ )
+		Array.Add( FJsonLibraryValue( ( *Json )[ i ] ).GetDateTime() );
+
+	return Array;
+}
+
+TArray<FGuid> FJsonLibraryList::ToGuidArray() const
+{
+	const TArray<TSharedPtr<FJsonValue>>* Json = GetJsonArray();
+
+	TArray<FGuid> Array;
+	if ( !Json )
+		return Array;
+
+	for ( int32 i = 0; i < Json->Num(); i++ )
+		Array.Add( FJsonLibraryValue( ( *Json )[ i ] ).GetGuid() );
 
 	return Array;
 }

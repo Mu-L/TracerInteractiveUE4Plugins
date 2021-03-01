@@ -85,6 +85,18 @@ FJsonLibraryValue::FJsonLibraryValue( const FString& Value )
 	JsonValue = MakeShareable( new FJsonValueString( Value ) );
 }
 
+FJsonLibraryValue::FJsonLibraryValue( const FDateTime& Value )
+	: FJsonLibraryValue( Value.ToIso8601() )
+{
+	//
+}
+
+FJsonLibraryValue::FJsonLibraryValue( const FGuid& Value )
+	: FJsonLibraryValue( Value.ToString( EGuidFormats::DigitsWithHyphens ) )
+{
+	//
+}
+
 FJsonLibraryValue::FJsonLibraryValue( const FRotator& Value )
 {
 	JsonValue = FJsonLibraryObject( Value ).JsonObject;
@@ -300,6 +312,30 @@ FString FJsonLibraryValue::GetString() const
 	return FString();
 }
 
+FDateTime FJsonLibraryValue::GetDateTime() const
+{
+	if ( !JsonValue.IsValid() || JsonValue->Type != EJson::String )
+		return FDateTime();
+
+	FDateTime DateTime;
+	if ( FDateTime::ParseIso8601( *JsonValue->AsString(), DateTime ) )
+		return DateTime;
+	
+	return FDateTime();
+}
+
+FGuid FJsonLibraryValue::GetGuid() const
+{
+	if ( !JsonValue.IsValid() || JsonValue->Type != EJson::String )
+		return FGuid();
+
+	FGuid Guid;
+	if ( FGuid::Parse( JsonValue->AsString(), Guid ) )
+		return Guid;
+	
+	return FGuid();
+}
+
 FRotator FJsonLibraryValue::GetRotator() const
 {
 	if ( GetType() == EJsonLibraryType::Object )
@@ -505,6 +541,27 @@ bool FJsonLibraryValue::TryStringify( FString& Text, bool bCondensed /*= true*/ 
 bool FJsonLibraryValue::IsValid() const
 {
 	return GetType() != EJsonLibraryType::Invalid;
+}
+
+bool FJsonLibraryValue::IsDateTime() const
+{
+	if ( !JsonValue.IsValid() || JsonValue->Type != EJson::String )
+		return false;
+
+	FDateTime DateTime;
+	return FDateTime::ParseIso8601( *JsonValue->AsString(), DateTime );
+}
+
+bool FJsonLibraryValue::IsGuid() const
+{
+	if ( !JsonValue.IsValid() || JsonValue->Type != EJson::String )
+		return false;
+
+	FGuid Guid;
+	if ( FGuid::Parse( JsonValue->AsString(), Guid ) )
+		return Guid.IsValid();
+
+	return false;
 }
 
 bool FJsonLibraryValue::IsRotator() const

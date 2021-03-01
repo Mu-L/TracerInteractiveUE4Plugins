@@ -40,6 +40,9 @@ public:
 	FJsonLibraryValue( uint64 Value );
 	FJsonLibraryValue( const FString& Value );
 
+	FJsonLibraryValue( const FDateTime& Value );
+	FJsonLibraryValue( const FGuid& Value );
+
 	FJsonLibraryValue( const FRotator& Value );
 	FJsonLibraryValue( const FTransform& Value );
 	FJsonLibraryValue( const FVector& Value );
@@ -66,6 +69,11 @@ public:
 	double GetNumber() const;
 	// Convert this value to a string.
 	FString GetString() const;
+
+	// Convert this value to a date/time.
+	FDateTime GetDateTime() const;
+	// Convert this value to a GUID.
+	FGuid GetGuid() const;
 
 	// Convert this value to a rotator.
 	FRotator GetRotator() const;
@@ -107,6 +115,11 @@ public:
 
 	// Check if this value is valid.
 	bool IsValid() const;
+	
+	// Check if this value is a date/time.
+	bool IsDateTime() const;
+	// Check if this value is a GUID.
+	bool IsGuid() const;
 
 	// Check if this value is a rotator.
 	bool IsRotator() const;

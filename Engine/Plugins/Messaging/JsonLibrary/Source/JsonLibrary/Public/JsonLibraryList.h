@@ -38,6 +38,9 @@ public:
 	FJsonLibraryList( const TArray<int32>& Value );
 	FJsonLibraryList( const TArray<FString>& Value );
 
+	FJsonLibraryList( const TArray<FDateTime>& Value );
+	FJsonLibraryList( const TArray<FGuid>& Value );
+
 	FJsonLibraryList( const TArray<FRotator>& Value );
 	FJsonLibraryList( const TArray<FTransform>& Value );
 	FJsonLibraryList( const TArray<FVector>& Value );
@@ -67,8 +70,14 @@ public:
 	void AppendNumberArray( const TArray<double>& Array );
 	// Append an array of strings to this list.
 	void AppendStringArray( const TArray<FString>& Array );
+
 	// Append an array of JSON objects to this list.
 	void AppendObjectArray( const TArray<FJsonLibraryObject>& Array );
+
+	// Append an array of date/times to this list.
+	void AppendDateTimeArray( const TArray<FDateTime>& Array );
+	// Append an array of GUIDs to this list.
+	void AppendGuidArray( const TArray<FGuid>& Array );
 
 	// Append an array of rotators to this list.
 	void AppendRotatorArray( const TArray<FRotator>& Array );
@@ -90,8 +99,14 @@ public:
 	void InjectNumberArray( int32 Index, const TArray<double>& Array );
 	// Inject the items of a string array into this list.
 	void InjectStringArray( int32 Index, const TArray<FString>& Array );
+
 	// Inject the items of an array of JSON objects into this list.
 	void InjectObjectArray( int32 Index, const TArray<FJsonLibraryObject>& Array );
+
+	// Inject the items of a date/time array into this list.
+	void InjectDateTimeArray( int32 Index, const TArray<FDateTime>& Array );
+	// Inject the items of a GUID array into this list.
+	void InjectGuidArray( int32 Index, const TArray<FGuid>& Array );
 
 	// Inject the items of a rotator array into this list.
 	void InjectRotatorArray( int32 Index, const TArray<FRotator>& Array );
@@ -110,6 +125,11 @@ public:
 	void AddNumber( double Value );
 	// Add a string to this list.
 	void AddString( const FString& Value );
+
+	// Add a date/time to this list.
+	void AddDateTime( const FDateTime& Value );
+	// Add a GUID to this list.
+	void AddGuid( const FGuid& Value );
 
 	// Add a rotator to this list.
 	void AddRotator( const FRotator& Value );
@@ -141,6 +161,11 @@ public:
 	// Insert a string into this list.
 	void InsertString( int32 Index, const FString& Value );
 
+	// Insert a date/time into this list.
+	void InsertDateTime( int32 Index, const FDateTime& Value );
+	// Insert a GUID into this list.
+	void InsertGuid( int32 Index, const FGuid& Value );
+
 	// Insert a rotator into this list.
 	void InsertRotator( int32 Index, const FRotator& Value );
 	// Insert a transform into this list.
@@ -171,6 +196,11 @@ public:
 	// Get an item as a string.
 	FString GetString( int32 Index ) const;
 
+	// Get an item as a date/time.
+	FDateTime GetDateTime( int32 Index ) const;
+	// Get an item as a GUID.
+	FGuid GetGuid( int32 Index ) const;
+
 	// Get an item as a rotator.
 	FRotator GetRotator( int32 Index ) const;
 	// Get an item as a transform.
@@ -200,6 +230,11 @@ public:
 	void SetNumber( int32 Index, double Value );
 	// Set an item as a string.
 	void SetString( int32 Index, const FString& Value );
+
+	// Set an item as a date/time.
+	void SetDateTime( int32 Index, const FDateTime& Value );
+	// Set an item as a GUID.
+	void SetGuid( int32 Index, const FGuid& Value );
 
 	// Set an item as a rotator.
 	void SetRotator( int32 Index, const FRotator& Value );
@@ -234,6 +269,11 @@ public:
 	// Remove a string from this list.
 	void RemoveString( const FString& Value );
 
+	// Remove a date/time from this list.
+	void RemoveDateTime( const FDateTime& Value );
+	// Remove a GUID from this list.
+	void RemoveGuid( const FGuid& Value );
+
 	// Remove a rotator from this list.
 	void RemoveRotator( const FRotator& Value );
 	// Remove a transform from this list.
@@ -258,6 +298,11 @@ public:
 	int32 FindNumber( double Value, int32 Index = 0 ) const;
 	// Find a string in this list.
 	int32 FindString( const FString& Value, int32 Index = 0 ) const;
+
+	// Find a date/time in this list.
+	int32 FindDateTime( const FDateTime& Value, int32 Index = 0 ) const;
+	// Find a GUID in this list.
+	int32 FindGuid( const FGuid& Value, int32 Index = 0 ) const;
 
 	// Find a rotator in this list.
 	int32 FindRotator( const FRotator& Value, int32 Index = 0 ) const;
@@ -326,6 +371,11 @@ public:
 	TArray<double> ToNumberArray() const;
 	// Copy this list to an array of strings.
 	TArray<FString> ToStringArray() const;
+
+	// Copy this list to an array of date/times.
+	TArray<FDateTime> ToDateTimeArray() const;
+	// Copy this list to an array of GUIDs.
+	TArray<FGuid> ToGuidArray() const;
 
 	// Copy this list to an array of rotators.
 	TArray<FRotator> ToRotatorArray() const;

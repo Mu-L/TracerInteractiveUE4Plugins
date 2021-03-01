@@ -61,6 +61,16 @@ FJsonLibraryValue UJsonLibraryHelpers::FromString( const FString& Value )
 	return FJsonLibraryValue( Value );
 }
 
+FJsonLibraryValue UJsonLibraryHelpers::FromDateTime( const FDateTime& Value )
+{
+	return FJsonLibraryValue( Value );
+}
+
+FJsonLibraryValue UJsonLibraryHelpers::FromGuid( const FGuid& Value )
+{
+	return FJsonLibraryValue( Value );
+}
+
 FJsonLibraryValue UJsonLibraryHelpers::FromRotator( const FRotator& Value )
 {
 	return FJsonLibraryValue( Value );
@@ -116,6 +126,16 @@ FJsonLibraryValue UJsonLibraryHelpers::FromStringArray( const TArray<FString>& V
 	return FromList( FJsonLibraryList( Value ) );
 }
 
+FJsonLibraryValue UJsonLibraryHelpers::FromDateTimeArray( const TArray<FDateTime>& Value )
+{
+	return FromList( FJsonLibraryList( Value ) );
+}
+
+FJsonLibraryValue UJsonLibraryHelpers::FromGuidArray( const TArray<FGuid>& Value )
+{
+	return FromList( FJsonLibraryList( Value ) );
+}
+
 FJsonLibraryValue UJsonLibraryHelpers::FromRotatorArray( const TArray<FRotator>& Value )
 {
 	return FromList( FJsonLibraryList( Value ) );
@@ -156,6 +176,16 @@ FJsonLibraryValue UJsonLibraryHelpers::FromStringMap( const TMap<FString, FStrin
 	return FromObject( FJsonLibraryObject( Value ) );
 }
 
+FJsonLibraryValue UJsonLibraryHelpers::FromDateTimeMap( const TMap<FString, FDateTime>& Value )
+{
+	return FromObject( FJsonLibraryObject( Value ) );
+}
+
+FJsonLibraryValue UJsonLibraryHelpers::FromGuidMap( const TMap<FString, FGuid>& Value )
+{
+	return FromObject( FJsonLibraryObject( Value ) );
+}
+
 FJsonLibraryValue UJsonLibraryHelpers::FromRotatorMap( const TMap<FString, FRotator>& Value )
 {
 	return FromObject( FJsonLibraryObject( Value ) );
@@ -189,6 +219,16 @@ int32 UJsonLibraryHelpers::ToInteger( const FJsonLibraryValue& Value )
 FString UJsonLibraryHelpers::ToString( const FJsonLibraryValue& Value )
 {
 	return Value.GetString();
+}
+
+FDateTime UJsonLibraryHelpers::ToDateTime( const FJsonLibraryValue& Value )
+{
+	return Value.GetDateTime();
+}
+
+FGuid UJsonLibraryHelpers::ToGuid( const FJsonLibraryValue& Value )
+{
+	return Value.GetGuid();
 }
 
 FRotator UJsonLibraryHelpers::ToRotator( const FJsonLibraryValue& Value )
@@ -246,6 +286,16 @@ TArray<FString> UJsonLibraryHelpers::ToStringArray( const FJsonLibraryValue& Tar
 	return Target.GetList().ToStringArray();
 }
 
+TArray<FDateTime> UJsonLibraryHelpers::ToDateTimeArray( const FJsonLibraryValue& Target )
+{
+	return Target.GetList().ToDateTimeArray();
+}
+
+TArray<FGuid> UJsonLibraryHelpers::ToGuidArray( const FJsonLibraryValue& Target )
+{
+	return Target.GetList().ToGuidArray();
+}
+
 TArray<FRotator> UJsonLibraryHelpers::ToRotatorArray( const FJsonLibraryValue& Target )
 {
 	return Target.GetList().ToRotatorArray();
@@ -284,6 +334,16 @@ TMap<FString, int32> UJsonLibraryHelpers::ToIntegerMap( const FJsonLibraryValue&
 TMap<FString, FString> UJsonLibraryHelpers::ToStringMap( const FJsonLibraryValue& Target )
 {
 	return Target.GetObject().ToStringMap();
+}
+
+TMap<FString, FDateTime> UJsonLibraryHelpers::ToDateTimeMap( const FJsonLibraryValue& Target )
+{
+	return Target.GetObject().ToDateTimeMap();
+}
+
+TMap<FString, FGuid> UJsonLibraryHelpers::ToGuidMap( const FJsonLibraryValue& Target )
+{
+	return Target.GetObject().ToGuidMap();
 }
 
 TMap<FString, FRotator> UJsonLibraryHelpers::ToRotatorMap( const FJsonLibraryValue& Target )
@@ -361,6 +421,17 @@ FJsonLibraryObject UJsonLibraryHelpers::ConvertStringMapToObject( const TMap<FSt
 	return FJsonLibraryObject( Value );
 }
 
+FJsonLibraryObject UJsonLibraryHelpers::ConvertDateTimeMapToObject( const TMap<FString, FDateTime>& Value )
+{
+	return FJsonLibraryObject( Value );
+}
+
+FJsonLibraryObject UJsonLibraryHelpers::ConvertGuidMapToObject( const TMap<FString, FGuid>& Value )
+{
+	return FJsonLibraryObject( Value );
+}
+
+
 FJsonLibraryObject UJsonLibraryHelpers::ConvertRotatorMapToObject( const TMap<FString, FRotator>& Value )
 {
 	return FJsonLibraryObject( Value );
@@ -406,6 +477,16 @@ FJsonLibraryList UJsonLibraryHelpers::ConvertStringArrayToList( const TArray<FSt
 	return FJsonLibraryList( Value );
 }
 
+FJsonLibraryList UJsonLibraryHelpers::ConvertDateTimeArrayToList( const TArray<FDateTime>& Value )
+{
+	return FJsonLibraryList( Value );
+}
+
+FJsonLibraryList UJsonLibraryHelpers::ConvertGuidArrayToList( const TArray<FGuid>& Value )
+{
+	return FJsonLibraryList( Value );
+}
+
 FJsonLibraryList UJsonLibraryHelpers::ConvertRotatorArrayToList( const TArray<FRotator>& Value )
 {
 	return FJsonLibraryList( Value );
@@ -440,6 +521,11 @@ bool UJsonLibraryHelpers::JsonValue_Equals( const FJsonLibraryValue& Target, con
 bool UJsonLibraryHelpers::JsonValue_IsValid( const FJsonLibraryValue& Target )
 {
 	return Target.IsValid();
+}
+
+bool UJsonLibraryHelpers::JsonValue_IsGuid( const FJsonLibraryValue& Target )
+{
+	return Target.IsGuid();
 }
 
 bool UJsonLibraryHelpers::JsonValue_IsRotator( const FJsonLibraryValue& Target )
@@ -520,6 +606,18 @@ FJsonLibraryObject& UJsonLibraryHelpers::JsonObject_AddStringMap( FJsonLibraryOb
 	return Target;
 }
 
+FJsonLibraryObject& UJsonLibraryHelpers::JsonObject_AddDateTimeMap( FJsonLibraryObject& Target, const TMap<FString, FDateTime>& Map )
+{
+	Target.AddDateTimeMap( Map );
+	return Target;
+}
+
+FJsonLibraryObject& UJsonLibraryHelpers::JsonObject_AddGuidMap( FJsonLibraryObject& Target, const TMap<FString, FGuid>& Map )
+{
+	Target.AddGuidMap( Map );
+	return Target;
+}
+
 FJsonLibraryObject& UJsonLibraryHelpers::JsonObject_AddRotatorMap( FJsonLibraryObject& Target, const TMap<FString, FRotator>& Map )
 {
 	Target.AddRotatorMap( Map );
@@ -566,6 +664,16 @@ int32 UJsonLibraryHelpers::JsonObject_GetInteger( const FJsonLibraryObject& Targ
 FString UJsonLibraryHelpers::JsonObject_GetString( const FJsonLibraryObject& Target, const FString& Key )
 {
 	return Target.GetString( Key );
+}
+
+FDateTime UJsonLibraryHelpers::JsonObject_GetDateTime( const FJsonLibraryObject& Target, const FString& Key )
+{
+	return Target.GetDateTime( Key );
+}
+
+FGuid UJsonLibraryHelpers::JsonObject_GetGuid( const FJsonLibraryObject& Target, const FString& Key )
+{
+	return Target.GetGuid( Key );
 }
 
 FRotator UJsonLibraryHelpers::JsonObject_GetRotator( const FJsonLibraryObject& Target, const FString& Key )
@@ -629,6 +737,18 @@ FJsonLibraryObject& UJsonLibraryHelpers::JsonObject_SetInteger( FJsonLibraryObje
 FJsonLibraryObject& UJsonLibraryHelpers::JsonObject_SetString( FJsonLibraryObject& Target, const FString& Key, const FString& Value )
 {
 	Target.SetString( Key, Value );
+	return Target;
+}
+
+FJsonLibraryObject& UJsonLibraryHelpers::JsonObject_SetDateTime( FJsonLibraryObject& Target, const FString& Key, const FDateTime& Value )
+{
+	Target.SetDateTime( Key, Value );
+	return Target;
+}
+
+FJsonLibraryObject& UJsonLibraryHelpers::JsonObject_SetGuid( FJsonLibraryObject& Target, const FString& Key, const FGuid& Value )
+{
+	Target.SetGuid( Key, Value );
 	return Target;
 }
 
@@ -763,6 +883,18 @@ FJsonLibraryList& UJsonLibraryHelpers::JsonList_AppendStringArray( FJsonLibraryL
 	return Target;
 }
 
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_AppendDateTimeArray( FJsonLibraryList& Target, const TArray<FDateTime>& Array )
+{
+	Target.AppendDateTimeArray( Array );
+	return Target;
+}
+
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_AppendGuidArray( FJsonLibraryList& Target, const TArray<FGuid>& Array )
+{
+	Target.AppendGuidArray( Array );
+	return Target;
+}
+
 FJsonLibraryList& UJsonLibraryHelpers::JsonList_AppendRotatorArray( FJsonLibraryList& Target, const TArray<FRotator>& Array )
 {
 	Target.AppendRotatorArray( Array );
@@ -817,6 +949,18 @@ FJsonLibraryList& UJsonLibraryHelpers::JsonList_InjectStringArray( FJsonLibraryL
 	return Target;
 }
 
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_InjectDateTimeArray( FJsonLibraryList& Target, int32 Index, const TArray<FDateTime>& Array )
+{
+	Target.InjectDateTimeArray( Index, Array );
+	return Target;
+}
+
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_InjectGuidArray( FJsonLibraryList& Target, int32 Index, const TArray<FGuid>& Array )
+{
+	Target.InjectGuidArray( Index, Array );
+	return Target;
+}
+
 FJsonLibraryList& UJsonLibraryHelpers::JsonList_InjectRotatorArray( FJsonLibraryList& Target, int32 Index, const TArray<FRotator>& Array )
 {
 	Target.InjectRotatorArray( Index, Array );
@@ -862,6 +1006,18 @@ FJsonLibraryList& UJsonLibraryHelpers::JsonList_AddInteger( FJsonLibraryList& Ta
 FJsonLibraryList& UJsonLibraryHelpers::JsonList_AddString( FJsonLibraryList& Target, const FString& Value )
 {
 	Target.AddString( Value );
+	return Target;
+}
+
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_AddDateTime( FJsonLibraryList& Target, const FDateTime& Value )
+{
+	Target.AddDateTime( Value );
+	return Target;
+}
+
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_AddGuid( FJsonLibraryList& Target, const FGuid& Value )
+{
+	Target.AddGuid( Value );
 	return Target;
 }
 
@@ -937,6 +1093,18 @@ FJsonLibraryList& UJsonLibraryHelpers::JsonList_InsertString( FJsonLibraryList& 
 	return Target;
 }
 
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_InsertDateTime( FJsonLibraryList& Target, int32 Index, const FDateTime& Value )
+{
+	Target.InsertDateTime( Index, Value );
+	return Target;
+}
+
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_InsertGuid( FJsonLibraryList& Target, int32 Index, const FGuid& Value )
+{
+	Target.InsertGuid( Index, Value );
+	return Target;
+}
+
 FJsonLibraryList& UJsonLibraryHelpers::JsonList_InsertRotator( FJsonLibraryList& Target, int32 Index, const FRotator& Value )
 {
 	Target.InsertRotator( Index, Value );
@@ -1005,6 +1173,16 @@ FString UJsonLibraryHelpers::JsonList_GetString( const FJsonLibraryList& Target,
 	return Target.GetString( Index );
 }
 
+FDateTime UJsonLibraryHelpers::JsonList_GetDateTime( const FJsonLibraryList& Target, int32 Index )
+{
+	return Target.GetDateTime( Index );
+}
+
+FGuid UJsonLibraryHelpers::JsonList_GetGuid( const FJsonLibraryList& Target, int32 Index )
+{
+	return Target.GetGuid( Index );
+}
+
 FRotator UJsonLibraryHelpers::JsonList_GetRotator( const FJsonLibraryList& Target, int32 Index )
 {
 	return Target.GetRotator( Index );
@@ -1066,6 +1244,18 @@ FJsonLibraryList& UJsonLibraryHelpers::JsonList_SetInteger( FJsonLibraryList& Ta
 FJsonLibraryList& UJsonLibraryHelpers::JsonList_SetString( FJsonLibraryList& Target, int32 Index, const FString& Value )
 {
 	Target.SetString( Index, Value );
+	return Target;
+}
+
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_SetDateTime( FJsonLibraryList& Target, int32 Index, const FDateTime& Value )
+{
+	Target.SetDateTime( Index, Value );
+	return Target;
+}
+
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_SetGuid( FJsonLibraryList& Target, int32 Index, const FGuid& Value )
+{
+	Target.SetGuid( Index, Value );
 	return Target;
 }
 
@@ -1147,6 +1337,18 @@ FJsonLibraryList& UJsonLibraryHelpers::JsonList_RemoveString( FJsonLibraryList& 
 	return Target;
 }
 
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_RemoveDateTime( FJsonLibraryList& Target, const FDateTime& Value )
+{
+	Target.RemoveDateTime( Value );
+	return Target;
+}
+
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_RemoveGuid( FJsonLibraryList& Target, const FGuid& Value )
+{
+	Target.RemoveGuid( Value );
+	return Target;
+}
+
 FJsonLibraryList& UJsonLibraryHelpers::JsonList_RemoveRotator( FJsonLibraryList& Target, const FRotator& Value )
 {
 	Target.RemoveRotator( Value );
@@ -1201,6 +1403,16 @@ int32 UJsonLibraryHelpers::JsonList_FindInteger( const FJsonLibraryList& Target,
 int32 UJsonLibraryHelpers::JsonList_FindString( const FJsonLibraryList& Target, const FString& Value, int32 Index /*= 0*/ )
 {
 	return Target.FindString( Value, Index );
+}
+
+int32 UJsonLibraryHelpers::JsonList_FindDateTime( const FJsonLibraryList& Target, const FDateTime& Value, int32 Index /*= 0*/ )
+{
+	return Target.FindDateTime( Value, Index );
+}
+
+int32 UJsonLibraryHelpers::JsonList_FindGuid( const FJsonLibraryList& Target, const FGuid& Value, int32 Index /*= 0*/ )
+{
+	return Target.FindGuid( Value, Index );
 }
 
 int32 UJsonLibraryHelpers::JsonList_FindRotator( const FJsonLibraryList& Target, const FRotator& Value, int32 Index /*= 0*/ )
