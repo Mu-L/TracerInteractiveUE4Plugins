@@ -127,7 +127,11 @@ void UMoviePipelineObjectIdRenderPass::SetupImpl(const MoviePipeline::FMoviePipe
 	// Re-initialize the render target with the correct bit depth.
 	TileRenderTarget = NewObject<UTextureRenderTarget2D>(GetTransientPackage());
 	TileRenderTarget->ClearColor = FLinearColor(0.0f, 0.0f, 0.0f, 0.0f);
-	TileRenderTarget->InitCustomFormat(InPassInitSettings.BackbufferResolution.X, InPassInitSettings.BackbufferResolution.Y, EPixelFormat::PF_B8G8R8A8, false);
+
+	// Ensure there's no gamma in the RT otherwise the HitProxy color ids don't round trip properly.
+	TileRenderTarget->TargetGamma = 0.f;
+	TileRenderTarget->InitCustomFormat(InPassInitSettings.BackbufferResolution.X, InPassInitSettings.BackbufferResolution.Y, EPixelFormat::PF_B8G8R8A8, true);
+	TileRenderTarget->AddToRoot();
 
 	AccumulatorPool = MakeShared<TAccumulatorPool<FMaskOverlappedAccumulator>, ESPMode::ThreadSafe>(6);
 	SurfaceQueue = MakeShared<FMoviePipelineSurfaceQueue>(InPassInitSettings.BackbufferResolution, EPixelFormat::PF_B8G8R8A8, 3, false);
@@ -158,12 +162,20 @@ void UMoviePipelineObjectIdRenderPass::SetupImpl(const MoviePipeline::FMoviePipe
 void UMoviePipelineObjectIdRenderPass::TeardownImpl()
 {
 	// This may call FlushRenderingCommands if there are outstanding readbacks that need to happen.
-	SurfaceQueue->Shutdown();
+	if (SurfaceQueue.IsValid())
+	{
+		SurfaceQueue->Shutdown();
+	}
 
 	// Stall until the task graph has completed any pending accumulations.
 	FTaskGraphInterface::Get().WaitUntilTasksComplete(OutstandingTasks, ENamedThreads::GameThread);
 	OutstandingTasks.Reset();
 	ManifestAnnotation.RemoveAnnotation(this);
+
+	if (TileRenderTarget.IsValid())
+	{
+		TileRenderTarget->RemoveFromRoot();
+	}
 
 	// Preserve our view state until the rendering thread has been flushed.
 	Super::TeardownImpl();
@@ -194,6 +206,20 @@ void UMoviePipelineObjectIdRenderPass::RenderSample_GameThreadImpl(const FMovieP
 	Super::RenderSample_GameThreadImpl(InSampleState);
 
 	FMoviePipelineRenderPassMetrics InOutSampleState = InSampleState;
+
+	// Wait for a surface to be available to write to. This will stall the game thread while the RHI/Render Thread catch up.
+	{
+		SCOPE_CYCLE_COUNTER(STAT_MoviePipeline_WaitForAvailableSurface);
+		SurfaceQueue->BlockUntilAnyAvailable();
+	}
+	
+	TSharedPtr<FSceneViewFamilyContext> ViewFamily = CalculateViewFamily(InOutSampleState);
+	
+	// Submit to be rendered. Main render pass always uses target 0. We do this before making the Hitproxy cache because
+	// BeginRenderingViewFamily ensures render state for things are created.
+	FRenderTarget* RenderTarget = GetViewRenderTarget()->GameThread_GetRenderTargetResource();
+	FCanvas Canvas = FCanvas(RenderTarget, nullptr, GetPipeline()->GetWorld(), ERHIFeatureLevel::SM5, FCanvas::CDM_DeferDrawing, 1.0f);
+	GetRendererModule().BeginRenderingViewFamily(&Canvas, ViewFamily.Get());
 
 	// The Hitproxy array gets invalidated quite often, so the results are no longer valid in the accumulation thread.
 	// To solve this, we will cache the required info on the game thread and pass the required info along with the render so that
@@ -307,22 +333,8 @@ void UMoviePipelineObjectIdRenderPass::RenderSample_GameThreadImpl(const FMovieP
 	// Update the annotation with new cached data
 	ManifestAnnotation.AddAnnotation(this, AccelData);
 
-
-	// Wait for a surface to be available to write to. This will stall the game thread while the RHI/Render Thread catch up.
-	{
-		SCOPE_CYCLE_COUNTER(STAT_MoviePipeline_WaitForAvailableSurface);
-		SurfaceQueue->BlockUntilAnyAvailable();
-	}
-
 	// Main Render Pass
 	{
-		TSharedPtr<FSceneViewFamilyContext> ViewFamily = CalculateViewFamily(InOutSampleState);
-
-		// Submit to be rendered. Main render pass always uses target 0.
-		FRenderTarget* RenderTarget = GetViewRenderTarget()->GameThread_GetRenderTargetResource();
-		FCanvas Canvas = FCanvas(RenderTarget, nullptr, GetPipeline()->GetWorld(), ERHIFeatureLevel::SM5, FCanvas::CDM_DeferDrawing, 1.0f);
-		GetRendererModule().BeginRenderingViewFamily(&Canvas, ViewFamily.Get());
-
 
 		// Readback + Accumulate.
 		TSharedRef<FImagePixelDataPayload, ESPMode::ThreadSafe> FramePayload = MakeShared<FImagePixelDataPayload, ESPMode::ThreadSafe>();

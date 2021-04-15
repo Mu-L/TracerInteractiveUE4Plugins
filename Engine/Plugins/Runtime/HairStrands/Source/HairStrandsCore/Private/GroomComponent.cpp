@@ -40,6 +40,9 @@ static int32 GHairEnableAdaptiveSubsteps = 0;
 static FAutoConsoleVariableRef CVarHairEnableAdaptiveSubsteps(TEXT("r.HairStrands.EnableAdaptiveSubsteps"), GHairEnableAdaptiveSubsteps, TEXT("Enable adaptive solver substeps"));
 bool IsHairAdaptiveSubstepsEnabled() { return (GHairEnableAdaptiveSubsteps == 1); }
 
+static int32 GHairBindingValidationEnable = 0;
+static FAutoConsoleVariableRef CVarHairBindingValidationEnable(TEXT("r.HairStrands.BindingValidation"), GHairBindingValidationEnable, TEXT("Enable groom binding validation, which report error/warnings with details about the cause."));
+
 #define LOCTEXT_NAMESPACE "GroomComponent"
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -946,6 +949,8 @@ UGroomComponent::UGroomComponent(const FObjectInitializer& ObjectInitializer)
 	SourceSkeletalMesh = nullptr; 
 	NiagaraComponents.Empty();
 	PhysicsAsset = nullptr;
+	bCanEverAffectNavigation = false;
+	bValidationEnable = GHairBindingValidationEnable > 0;
 
 	SetCollisionProfileName(UCollisionProfile::PhysicsActor_ProfileName);
 
@@ -1007,7 +1012,7 @@ void UGroomComponent::ReleaseHairSimulation()
 	NiagaraComponents.Empty();
 }
 
-void EnableHairSimulation(UGroomComponent* GroomComponent, const bool bEnableSimulation)
+void EnableHairSimulation(UGroomComponent* GroomComponent, const bool bEnableSimulation, const bool bHasWorldReady)
 {
 	if (!GroomComponent)
 	{
@@ -1037,26 +1042,29 @@ void EnableHairSimulation(UGroomComponent* GroomComponent, const bool bEnableSim
 			}
 		}
 	}
-	if (IsHairAdaptiveSubstepsEnabled())
+	if (bHasWorldReady)
 	{
-		if (NeedSpringsSolver)
+		if (IsHairAdaptiveSubstepsEnabled())
 		{
-			GroomComponent->AngularSpringsSystem = LoadObject<UNiagaraSystem>(nullptr, TEXT("/HairStrands/Emitters/SimpleSpringsSystem.SimpleSpringsSystem"));
+			if (NeedSpringsSolver)
+			{
+				GroomComponent->AngularSpringsSystem = LoadObject<UNiagaraSystem>(nullptr, TEXT("/HairStrands/Emitters/SimpleSpringsSystem.SimpleSpringsSystem"));
+			}
+			if (NeedRodsSolver)
+			{
+				GroomComponent->CosseratRodsSystem = LoadObject<UNiagaraSystem>(nullptr, TEXT("/HairStrands/Emitters/SimpleRodsSystem.SimpleRodsSystem"));
+			}
 		}
-		if (NeedRodsSolver)
+		else
 		{
-			GroomComponent->CosseratRodsSystem = LoadObject<UNiagaraSystem>(nullptr, TEXT("/HairStrands/Emitters/SimpleRodsSystem.SimpleRodsSystem"));
-		}
-	}
-	else
-	{
-		if (NeedSpringsSolver)
-		{
-			GroomComponent->AngularSpringsSystem = LoadObject<UNiagaraSystem>(nullptr, TEXT("/HairStrands/Emitters/StableSpringsSystem.StableSpringsSystem"));
-		}
-		if (NeedRodsSolver)
-		{
-			GroomComponent->CosseratRodsSystem = LoadObject<UNiagaraSystem>(nullptr, TEXT("/HairStrands/Emitters/StableRodsSystem.StableRodsSystem"));
+			if (NeedSpringsSolver)
+			{
+				GroomComponent->AngularSpringsSystem = LoadObject<UNiagaraSystem>(nullptr, TEXT("/HairStrands/Emitters/StableSpringsSystem.StableSpringsSystem"));
+			}
+			if (NeedRodsSolver)
+			{
+				GroomComponent->CosseratRodsSystem = LoadObject<UNiagaraSystem>(nullptr, TEXT("/HairStrands/Emitters/StableRodsSystem.StableRodsSystem"));
+			}
 		}
 	}
 	GroomComponent->NiagaraComponents.SetNumZeroed(NumComponents);
@@ -1079,25 +1087,22 @@ void EnableHairSimulation(UGroomComponent* GroomComponent, const bool bEnableSim
 				}
 				NiagaraComponent->SetVisibleFlag(false);
 			}
-			if (GroomAsset->HairGroupsPhysics[i].SolverSettings.NiagaraSolver == EGroomNiagaraSolvers::AngularSprings)
+			if (bHasWorldReady)
 			{
-				NiagaraComponent->SetAsset(GroomComponent->AngularSpringsSystem);
+				if (GroomAsset->HairGroupsPhysics[i].SolverSettings.NiagaraSolver == EGroomNiagaraSolvers::AngularSprings)
+				{
+					NiagaraComponent->SetAsset(GroomComponent->AngularSpringsSystem);
+				}
+				else if (GroomAsset->HairGroupsPhysics[i].SolverSettings.NiagaraSolver == EGroomNiagaraSolvers::CosseratRods)
+				{
+					NiagaraComponent->SetAsset(GroomComponent->CosseratRodsSystem);
+				}
+				else
+				{
+					NiagaraComponent->SetAsset(GroomAsset->HairGroupsPhysics[i].SolverSettings.CustomSystem.LoadSynchronous());
+				}
 			}
-			else if (GroomAsset->HairGroupsPhysics[i].SolverSettings.NiagaraSolver == EGroomNiagaraSolvers::CosseratRods)
-			{
-				NiagaraComponent->SetAsset(GroomComponent->CosseratRodsSystem);
-			}
-			else
-			{
-				NiagaraComponent->SetAsset(GroomAsset->HairGroupsPhysics[i].SolverSettings.CustomSystem.LoadSynchronous());
-			}
-
 			NiagaraComponent->ReinitializeSystem();
-			if (NiagaraComponent->GetSystemInstance())
-			{
-				NiagaraComponent->GetSystemInstance()->Reset(FNiagaraSystemInstance::EResetMode::ReInit);
-				NiagaraComponent->GetSystemInstance()->Reset(FNiagaraSystemInstance::EResetMode::ResetAll);
-			}
 		}
 		else if (NiagaraComponent && !NiagaraComponent->IsBeingDestroyed())
 		{
@@ -1109,7 +1114,7 @@ void EnableHairSimulation(UGroomComponent* GroomComponent, const bool bEnableSim
 
 void UGroomComponent::UpdateHairSimulation()  
 {
-	EnableHairSimulation(this,true);
+	EnableHairSimulation(this,true,true);
 }
 
 void UGroomComponent::SetGroomAsset(UGroomAsset* Asset)
@@ -1163,7 +1168,8 @@ void UGroomComponent::SetGroomAsset(UGroomAsset* Asset, UGroomBindingAsset* InBi
 	}
 
 	UpdateHairGroupsDesc();
-	UpdateHairSimulation();
+	//UpdateHairSimulation();
+	EnableHairSimulation(this,true,false);
 	if (!GroomAsset || !GroomAsset->IsValid())
 	{
 		return;
@@ -1253,11 +1259,11 @@ void UGroomComponent::SetForcedLOD(int32 LODIndex)
 	{
 		if (bValidLODB)
 		{
-			EnableHairSimulation(this, true);
+			EnableHairSimulation(this, true, true);
 		}
 		else 
 		{
-			EnableHairSimulation(this, false);
+			EnableHairSimulation(this, false, true);
 		}
 	}
 
@@ -1806,6 +1812,10 @@ void UGroomComponent::InitResources(bool bIsBindingReloading)
 
 	// Insure that the binding asset is compatible, otherwise no binding will be used
 	USkeletalMeshComponent* SkeletalMeshComponent = ValidateBindingAsset(GroomAsset, BindingAsset, GetAttachParent() ? Cast<USkeletalMeshComponent>(GetAttachParent()) : nullptr, bIsBindingReloading, bValidationEnable, this);
+	if (SkeletalMeshComponent && SkeletalMeshComponent->SkeletalMesh == nullptr)
+	{
+		SkeletalMeshComponent = nullptr;
+	}
 
 	// Insure the ticking of the Groom component always happens after the skeletalMeshComponent.
 	if (SkeletalMeshComponent)
@@ -2215,8 +2225,12 @@ void UGroomComponent::PostLoad()
 #if WITH_EDITOR
 	if (GroomAsset && !bIsGroomAssetCallbackRegistered)
 	{
+		// Delegate used for notifying groom data invalidation
 		GroomAsset->GetOnGroomAssetChanged().AddUObject(this, &UGroomComponent::Invalidate);
+
+		// Delegate used for notifying groom data & groom resoures invalidation
 		GroomAsset->GetOnGroomAssetResourcesChanged().AddUObject(this, &UGroomComponent::InvalidateAndRecreate);
+
 		bIsGroomAssetCallbackRegistered = true;
 	}
 
@@ -2277,6 +2291,7 @@ void UGroomComponent::OnUnregister()
 {
 	Super::OnUnregister();
 	ReleaseHairSimulation();
+	ReleaseResources();
 }
 
 void UGroomComponent::OnComponentDestroyed(bool bDestroyingHierarchy)

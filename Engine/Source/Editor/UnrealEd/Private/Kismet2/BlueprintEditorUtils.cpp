@@ -2112,6 +2112,14 @@ void FBlueprintEditorUtils::MarkBlueprintAsModified(UBlueprint* Blueprint, FProp
 		if (!Blueprint->bBeingCompiled && BPGC)
 		{
 			BPGC->UpdateCustomPropertyListForPostConstruction();
+
+			TArray<UClass*> ChildClasses;
+			GetDerivedClasses(BPGC, ChildClasses);
+
+			for (UClass* ChildClass : ChildClasses)
+			{
+				CastChecked<UBlueprintGeneratedClass>(ChildClass)->UpdateCustomPropertyListForPostConstruction();
+			}
 		}
 
 		Blueprint->Status = BS_Dirty;
@@ -5048,7 +5056,7 @@ void FBlueprintEditorUtils::ChangeMemberVariableType(UBlueprint* Blueprint, cons
 				/** Only change the variable type if type selection is valid, some unloaded Blueprints will turn out to be bad */
 				bool bChangeVariableType = true;
 
-				if ((NewPinType.PinCategory == UEdGraphSchema_K2::PC_Object) || (NewPinType.PinCategory == UEdGraphSchema_K2::PC_Interface) || (NewPinType.PinCategory == UEdGraphSchema_K2::PC_SoftObject))
+				if ((NewPinType.PinCategory == UEdGraphSchema_K2::PC_Object) || (NewPinType.PinCategory == UEdGraphSchema_K2::PC_Interface))
 				{
 					// if it's a PC_Object, then it should have an associated UClass object
 					if(NewPinType.PinSubCategoryObject.IsValid())
@@ -5058,8 +5066,7 @@ void FBlueprintEditorUtils::ChangeMemberVariableType(UBlueprint* Blueprint, cons
 
 						if (ClassObject->IsChildOf(AActor::StaticClass()))
 						{
-							// prevent Actor variables from having default values (because Blueprint templates are library elements that can 
-							// bridge multiple levels and different levels might not have the actor that the default is referencing).
+							// NOTE: Right now the code that stops hard AActor references from being set in unsafe places is tied to this flag
 							Variable.PropertyFlags |= CPF_DisableEditOnTemplate;
 						}
 						else 
@@ -9448,7 +9455,7 @@ bool FBlueprintEditorUtils::CheckIfGraphHasLatentFunctions(UEdGraph* InGraph)
 
 void FBlueprintEditorUtils::PostSetupObjectPinType(UBlueprint* InBlueprint, FBPVariableDescription& InOutVarDesc)
 {
-	if ((InOutVarDesc.VarType.PinCategory == UEdGraphSchema_K2::PC_Object) || (InOutVarDesc.VarType.PinCategory == UEdGraphSchema_K2::PC_Interface) || (InOutVarDesc.VarType.PinCategory == UEdGraphSchema_K2::PC_SoftObject))
+	if ((InOutVarDesc.VarType.PinCategory == UEdGraphSchema_K2::PC_Object) || (InOutVarDesc.VarType.PinCategory == UEdGraphSchema_K2::PC_Interface))
 	{
 		if (InOutVarDesc.VarType.PinSubCategory == UEdGraphSchema_K2::PSC_Self)
 		{

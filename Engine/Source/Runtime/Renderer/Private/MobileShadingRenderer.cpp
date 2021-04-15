@@ -291,6 +291,14 @@ void FMobileSceneRenderer::InitViews(FRHICommandListImmediate& RHICmdList)
 
 	check(Scene);
 
+	if (bUseVirtualTexturing)
+	{
+		SCOPED_GPU_STAT(RHICmdList, VirtualTextureUpdate);
+		// AllocateResources needs to be called before RHIBeginScene
+		FVirtualTextureSystem::Get().AllocateResources(RHICmdList, FeatureLevel);
+		FVirtualTextureSystem::Get().CallPendingCallbacks();
+	}
+
 	FILCUpdatePrimTaskData ILCTaskData;
 	FViewVisibleCommandsPerView ViewCommandsPerView;
 	ViewCommandsPerView.SetNum(Views.Num());
@@ -368,14 +376,6 @@ void FMobileSceneRenderer::InitViews(FRHICommandListImmediate& RHICmdList)
 		InitSkyAtmosphereForViews(RHICmdList);
 	}
 		
-	if (bUseVirtualTexturing)
-	{
-		SCOPED_GPU_STAT(RHICmdList, VirtualTextureUpdate);
-		// AllocateResources needs to be called before RHIBeginScene
-		FVirtualTextureSystem::Get().AllocateResources(RHICmdList, FeatureLevel);
-		FVirtualTextureSystem::Get().CallPendingCallbacks();
-	}
-
 	if (bRequiresPixelProjectedPlanarRelfectionPass)
 	{
 		InitPixelProjectedReflectionOutputs(RHICmdList, PlanarReflectionSceneProxy->RenderTarget->GetSizeXY());
@@ -595,6 +595,7 @@ void FMobileSceneRenderer::Render(FRHICommandListImmediate& RHICmdList)
 		RHICmdList.Transition(FRHITransitionInfo(FeedbackUAV, ERHIAccess::SRVMask, ERHIAccess::UAVMask));
 		RHICmdList.ClearUAVUint(FeedbackUAV, FUintVector4(~0u, ~0u, ~0u, ~0u));
 		RHICmdList.Transition(FRHITransitionInfo(FeedbackUAV, ERHIAccess::UAVMask, ERHIAccess::UAVMask));
+		RHICmdList.BeginUAVOverlap(FeedbackUAV);
 	}
 	
 	FSortedLightSetSceneInfo SortedLightSet;
@@ -709,6 +710,7 @@ void FMobileSceneRenderer::Render(FRHICommandListImmediate& RHICmdList)
 		SCOPED_GPU_STAT(RHICmdList, VirtualTextureUpdate);
 
 		// No pass after this should make VT page requests
+		RHICmdList.EndUAVOverlap(SceneContext.VirtualTextureFeedbackUAV);
 		RHICmdList.Transition(FRHITransitionInfo(SceneContext.VirtualTextureFeedbackUAV, ERHIAccess::UAVMask, ERHIAccess::SRVMask));
 
 		TArray<FIntRect, TInlineAllocator<4>> ViewRects;

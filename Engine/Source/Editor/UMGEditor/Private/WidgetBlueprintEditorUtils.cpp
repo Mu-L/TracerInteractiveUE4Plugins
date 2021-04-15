@@ -439,7 +439,7 @@ void FWidgetBlueprintEditorUtils::DeleteWidgets(UWidgetBlueprint* Blueprint, TSe
 				AllWidgets.Append(ChildWidgets);
 			}
 
-			TArray<FText> WidgetNames;
+		TArray<FText> WidgetNames;
 			for (UWidget* Widget : AllWidgets)
 			{
 				if (FBlueprintEditorUtils::IsVariableUsed(Blueprint, Widget->GetFName()))
@@ -461,9 +461,9 @@ void FWidgetBlueprintEditorUtils::DeleteWidgets(UWidgetBlueprint* Blueprint, TSe
 
 				FSuppressableWarningDialog DeleteVariableInUse(Info);
 				if (DeleteVariableInUse.ShowModal() == FSuppressableWarningDialog::Cancel)
-				{
-					return;
-				}
+		{
+			return;
+		}		
 			}
 		}
 
@@ -919,7 +919,7 @@ void FWidgetBlueprintEditorUtils::ReplaceWidgetWithSelectedTemplate(TSharedRef<F
 		FString ReplaceName = ThisWidget->GetName();
 		bool bIsGeneratedName = ThisWidget->IsGeneratedName();
 		// Rename the removed widget to the transient package so that it doesn't conflict with future widgets sharing the same name.
-		ThisWidget->Rename(nullptr, nullptr);
+		ThisWidget->Rename(nullptr, GetTransientPackage());
 
 		// Rename the new Widget to maintain the current name if it's not a generic name
 		if (!bIsGeneratedName)
@@ -962,7 +962,7 @@ bool FWidgetBlueprintEditorUtils::CanBeReplacedWithTemplate(TSharedRef<FWidgetBl
 		}
 		UUserWidget* NewUserWidget = CastChecked<UUserWidget>(FWidgetTemplateBlueprintClass(SelectedUserWidget).Create(BP->WidgetTree));
 		const bool bFreeFromCircularRefs = BP->IsWidgetFreeFromCircularReferences(NewUserWidget);
-		NewUserWidget->Rename(nullptr, nullptr);
+		NewUserWidget->Rename(nullptr, GetTransientPackage());
 		return bFreeFromCircularRefs;
 	}
 
@@ -1003,7 +1003,7 @@ bool FWidgetBlueprintEditorUtils::CanBeReplacedWithTemplate(TSharedRef<FWidgetBl
 
 void FWidgetBlueprintEditorUtils::ReplaceWidgetWithChildren(TSharedRef<FWidgetBlueprintEditor> BlueprintEditor, UWidgetBlueprint* BP, FWidgetReference Widget)
 {
-	if ( UPanelWidget* ExistingPanelTemplate = Cast<UPanelWidget>(Widget.GetTemplate()) )
+	if (UPanelWidget* ExistingPanelTemplate = Cast<UPanelWidget>(Widget.GetTemplate()))
 	{
 		UWidget* FirstChildTemplate = ExistingPanelTemplate->GetChildAt(0);
 
@@ -1012,14 +1012,14 @@ void FWidgetBlueprintEditorUtils::ReplaceWidgetWithChildren(TSharedRef<FWidgetBl
 		ExistingPanelTemplate->Modify();
 		FirstChildTemplate->Modify();
 
-		if ( UPanelWidget* PanelParentTemplate = ExistingPanelTemplate->GetParent() )
+		if (UPanelWidget* PanelParentTemplate = ExistingPanelTemplate->GetParent())
 		{
 			PanelParentTemplate->Modify();
 
 			FirstChildTemplate->RemoveFromParent();
 			PanelParentTemplate->ReplaceChild(ExistingPanelTemplate, FirstChildTemplate);
 		}
-		else if ( ExistingPanelTemplate == BP->WidgetTree->RootWidget )
+		else if (ExistingPanelTemplate == BP->WidgetTree->RootWidget)
 		{
 			FirstChildTemplate->RemoveFromParent();
 
@@ -1036,8 +1036,8 @@ void FWidgetBlueprintEditorUtils::ReplaceWidgetWithChildren(TSharedRef<FWidgetBl
 			return;
 		}
 
-		// Rename the removed widget to the transient package so that it doesn't conflict with future widgets sharing the same name.
-		ExistingPanelTemplate->Rename(nullptr, nullptr);
+		// Delete the widget that has been replaced
+		DeleteWidgets(BP, {Widget});
 
 		FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(BP);
 	}
@@ -1079,8 +1079,8 @@ void FWidgetBlueprintEditorUtils::ReplaceWidgetWithNamedSlot(TSharedRef<FWidgetB
 			return;
 		}
 
-		// Rename the removed widget to the transient package so that it doesn't conflict with future widgets sharing the same name.
-		WidgetTemplate->Rename(nullptr, nullptr);
+		// Remove the widget replaced
+		DeleteWidgets(BP, {Widget});
 
 		FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(BP);
 	}
@@ -1414,9 +1414,10 @@ TArray<UWidget*> FWidgetBlueprintEditorUtils::PasteWidgetsInternal(TSharedRef<FW
 		{
 			// If parent widget can only have one child and that slot is already occupied, we will remove its contents so the pasted widgets can be inserted in their place
 			UWidget* ChildWidgetToDelete = nullptr;
-			if ( !ParentWidget->CanHaveMultipleChildren() )
+			if (!ParentWidget->CanHaveMultipleChildren() && ParentWidget->GetChildrenCount() > 0)
 			{
-				if ( ParentWidget->GetChildrenCount() > 0 || RootPasteWidgets.Num() > 1 )
+				// We do not Remove child if there is nothing to paste.
+				if (RootPasteWidgets.Num() > 0)
 				{
 					// Delete the singular child
 					ChildWidgetToDelete = ParentWidget->GetAllChildren()[0];

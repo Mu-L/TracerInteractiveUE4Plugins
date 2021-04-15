@@ -310,8 +310,16 @@ void FVirtualTextureDataBuilder::Build(const FTextureSourceData& InSourceData, c
 	}
 
 	check(SettingsPerLayer[0].MaxTextureResolution >= (uint32)TileSize);
-	BlockSizeX = FMath::Min<uint32>(BlockSizeX, SettingsPerLayer[0].MaxTextureResolution);
-	BlockSizeY = FMath::Min<uint32>(BlockSizeY, SettingsPerLayer[0].MaxTextureResolution);
+	
+	// Clamp BlockSizeX and BlockSizeY to MaxTextureResolution, but don't change aspect ratio
+	const uint32 ClampBlockSize = SettingsPerLayer[0].MaxTextureResolution;
+	if (FMath::Max<uint32>(BlockSizeX, BlockSizeY) > ClampBlockSize)
+	{
+		const int32 ClampedBlockSizeX = BlockSizeX >= BlockSizeY ? ClampBlockSize : FMath::Max(ClampBlockSize * BlockSizeX / BlockSizeY, 1u);
+		const int32 ClampedBlockSizeY = BlockSizeY >= BlockSizeX ? ClampBlockSize : FMath::Max(ClampBlockSize * BlockSizeY / BlockSizeX, 1u);
+		BlockSizeX = ClampedBlockSizeX;
+		BlockSizeY = ClampedBlockSizeY;
+	}
 
 	// We require VT blocks (UDIM pages) to be PoT, but multi block textures may have full logical dimension that's not PoT
 	check(FMath::IsPowerOfTwo(BlockSizeX));
@@ -940,8 +948,17 @@ void FVirtualTextureDataBuilder::BuildSourcePixels(const FTextureSourceData& Sou
 			check(bBuildTextureResult);
 
 			// Get size of block from Compressor output, since it may have been padded/adjusted
-			BlockData.SizeX = CompressedMips[0].SizeX;
-			BlockData.SizeY = CompressedMips[0].SizeY;
+			{
+				BlockData.SizeX = CompressedMips[0].SizeX;
+				BlockData.SizeY = CompressedMips[0].SizeY;
+
+				// re-compute mip bias to account for any resizing of this block (typically due to clamped max size)
+				const int32 MipBiasX = FMath::CeilLogTwo(BlockSizeX / BlockData.SizeX);
+				const int32 MipBiasY = FMath::CeilLogTwo(BlockSizeY / BlockData.SizeY);
+				checkf(MipBiasX == MipBiasY, TEXT("Mismatched aspect ratio (%d x %d), (%d x %d)"), BlockSizeX, BlockSizeY, BlockData.SizeX, BlockData.SizeY);
+				BlockData.MipBias = MipBiasX;
+			}
+
 			check(BlockData.SizeX << BlockData.MipBias == BlockSizeX);
 			check(BlockData.SizeY << BlockData.MipBias == BlockSizeY);
 
@@ -1041,7 +1058,7 @@ void FVirtualTextureDataBuilder::BuildSourcePixels(const FTextureSourceData& Sou
 			// Adjust the build settings to generate an uncompressed texture with mips but leave other settings
 			// like color correction, ... in place
 			FTextureBuildSettings TBSettings = SettingsPerLayer[0];
-			//TBSettings.MaxTextureResolution = TNumericLimits<uint32>::Max();
+			TBSettings.MaxTextureResolution = TNumericLimits<uint32>::Max(); // don't limit the size of the mip-tail, this limit only applies to each source block
 			TBSettings.TextureFormatName = LayerData.FormatName;
 			TBSettings.bSRGB = BuildSettingsForLayer.bSRGB;
 			TBSettings.bUseLegacyGamma = BuildSettingsForLayer.bUseLegacyGamma;

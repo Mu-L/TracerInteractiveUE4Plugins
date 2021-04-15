@@ -26,7 +26,7 @@
 static TAutoConsoleVariable<int32> CVarKeepNotifyAndCurvesOnAnimationRecord(
 	TEXT("a.KeepNotifyAndCurvesOnAnimationRecord"),
 	1,
-	TEXT("If nonzero we keep anim notifies, curves and sycn markers when animation recording, if 0 we discard them before recording."),
+	TEXT("If nonzero we keep anim notifies, curves and sync markers when animation recording, if 0 we discard them before recording."),
 	ECVF_Default);
 
 /////////////////////////////////////////////////////
@@ -456,6 +456,11 @@ UAnimSequence* FAnimationRecorder::StopRecord(bool bShowMessage)
 
 void FAnimationRecorder::ProcessRecordedTimes(UAnimSequence* AnimSequence, USkeletalMeshComponent* SkeletalMeshComponent, const FString& HoursName, const FString& MinutesName, const FString& SecondsName, const FString& FramesName, const FString& SubFramesName, const FString& SlateName, const FString& Slate)
 {
+	if (!AnimSequence || !SkeletalMeshComponent)
+	{
+		return;
+	}
+
 	int32 NumFrames = LastFrame  + 1;
 	if (RecordedTimes.Num() != NumFrames)
 	{

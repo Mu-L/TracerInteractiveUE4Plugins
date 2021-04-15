@@ -174,7 +174,7 @@ const FMovieSceneEvaluationGroup* FMovieSceneTrackEvaluator::SetupFrame(UMovieSc
 	RootOverridePath.Set(InOverrideRootID, RootHierarchy);
 
 	const FMovieSceneEvaluationField* OverrideRootField = nullptr;
-	FMovieSceneSequenceTransform RootOverrideTransform;
+	FFrameTime RootTime = Context.GetTime();
 
 	if (InOverrideRootID == MovieSceneSequenceID::Root)
 	{
@@ -189,7 +189,7 @@ const FMovieSceneEvaluationGroup* FMovieSceneTrackEvaluator::SetupFrame(UMovieSc
 		OverrideRootField = CompiledDataManager->FindTrackTemplateField(OverrideRootDataID);
 		if (const FMovieSceneSubSequenceData* OverrideSubData = RootHierarchy->FindSubData(InOverrideRootID))
 		{
-			RootOverrideTransform = OverrideSubData->RootToSequenceTransform;
+			RootTime *= OverrideSubData->RootToSequenceTransform;
 		}
 	}
 
@@ -200,7 +200,7 @@ const FMovieSceneEvaluationGroup* FMovieSceneTrackEvaluator::SetupFrame(UMovieSc
 
 	// The one that we want to evaluate is either the first or last index in the range.
 	// FieldRange is always of the form [First, Last+1)
-	const int32 TemplateFieldIndex = OverrideRootField->GetSegmentFromTime(Context.GetTime().FloorToFrame());
+	const int32 TemplateFieldIndex = OverrideRootField->GetSegmentFromTime(RootTime.FloorToFrame());
 	if (TemplateFieldIndex != INDEX_NONE)
 	{
 		// Set meta-data
@@ -370,6 +370,13 @@ void FMovieSceneTrackEvaluator::CallSetupTearDown(IMovieScenePlayer& Player, FDe
 			{
 				Player.PreAnimatedState.RestorePreAnimatedState(Player, Key);
 			}
+		}
+		else
+		{
+			// If the track has been destroyed since it was last evaluated, we can still restore state for anything it made
+			// In particular this is needed for movie renders, where it will enable/disable shots between cuts in order
+			// to render handle frames
+			Player.PreAnimatedState.RestorePreAnimatedState(Player, Key);
 		}
 	}
 

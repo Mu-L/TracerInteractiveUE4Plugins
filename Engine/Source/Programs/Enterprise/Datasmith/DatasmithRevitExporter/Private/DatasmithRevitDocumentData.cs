@@ -29,6 +29,8 @@ namespace DatasmithRevitExporter
 			public bool						bIsModified = true;
 			public bool						bAllowMeshInstancing = true;
 
+			public Dictionary<string, int>		MeshMaterialsMap = new Dictionary<string, int>();
+
 			public List<FBaseElementData>	ChildElements = new List<FBaseElementData>();
 
 			public FBaseElementData			Parent = null;
@@ -98,7 +100,14 @@ namespace DatasmithRevitExporter
 				{
 					foreach (FBaseElementData CurrentChild in ChildElements)
 					{
-						CurrentChild.AddToScene(InScene, this, false, (ThisElement == null) && bIsModified);
+						// Stairs get special treatment: elements of stairs (strings, landings etc.) can be duplicated,
+						// meaning that the same element id can exist multiple times under the same parent.
+						bool bIsStairsElement = (ThisElement != null) && (ThisElement.GetType() == typeof(Stairs));
+
+						bool bIsInstance = (ThisElement == null);
+						bool bForceAdd = (bIsInstance && bIsModified) || (bIsStairsElement && bIsModified);
+
+						CurrentChild.AddToScene(InScene, this, false, bForceAdd);
 					}
 				}
 
@@ -159,16 +168,6 @@ namespace DatasmithRevitExporter
 				FDatasmithFacadeActorMesh MeshActor = ElementActor as FDatasmithFacadeActorMesh;
 				MeshActor.SetMesh(ElementMesh.GetName());
 				bOptimizeHierarchy = false;
-			}
-
-			public void ResetMeshMaterials()
-			{
-				string HashedMeshName = ElementMesh?.GetName() ?? "";
-
-				if (DocumentData.MeshMaterialsMap.TryGetValue(HashedMeshName, out _))
-				{
-					DocumentData.MeshMaterialsMap[HashedMeshName].Clear();
-				}
 			}
 		}
 
@@ -496,7 +495,9 @@ namespace DatasmithRevitExporter
 					{
 						GeometryElement RPCInstanceGeometry = RPCGeometryInstance.GetInstanceGeometry();
 
-						int MaterialIndex = DocumentData.GetMeshMaterialIndex(RPCMesh, InRPCMaterialName);
+						int MaterialIndex = 0;
+
+						RPCMesh.AddMaterial(MaterialIndex, InRPCMaterialName);
 
 						foreach (GeometryObject RPCInstanceGeometryObject in RPCInstanceGeometry)
 						{
@@ -880,7 +881,6 @@ namespace DatasmithRevitExporter
 		public Dictionary<ElementId, FBaseElementData>	ActorMap = new Dictionary<ElementId, FDocumentData.FBaseElementData>();
 		public Dictionary<string, FMaterialData>		MaterialDataMap = null;
 		public Dictionary<string, FMaterialData>		NewMaterialsMap = new Dictionary<string, FMaterialData>();
-		public Dictionary<string, Dictionary<string, int>> MeshMaterialsMap = null;
 
 		private Stack<FElementData>						ElementDataStack = new Stack<FElementData>();
 		private string									CurrentMaterialName = null;
@@ -906,23 +906,24 @@ namespace DatasmithRevitExporter
 
 			if (DirectLink != null)
 			{
-				MeshMaterialsMap = DirectLink.MeshMaterialsMap;
 				MaterialDataMap = DirectLink.MaterialDataMap;
 			}
 			else
 			{
-				MeshMaterialsMap = new Dictionary<string, Dictionary<string, int>>();
 				MaterialDataMap = new Dictionary<string, FMaterialData>();
 			}
 
 			// Cache document section boxes
-			FilteredElementCollector Collector = new FilteredElementCollector(CurrentDocument, CurrentDocument.ActiveView.Id);
-			IList<Element> SectionBoxes = Collector.OfCategory(BuiltInCategory.OST_SectionBox).ToElements();
-
-			foreach (var SectionBox in SectionBoxes)
+			if (CurrentDocument.ActiveView != null)
 			{
-				BoundingBoxXYZ BBox = SectionBox.get_BoundingBox(CurrentDocument.ActiveView);
-				SectionBoxOutlines.Add(GetOutline(BBox.Transform, BBox));
+				FilteredElementCollector Collector = new FilteredElementCollector(CurrentDocument, CurrentDocument.ActiveView.Id);
+				IList<Element> SectionBoxes = Collector.OfCategory(BuiltInCategory.OST_SectionBox).ToElements();
+
+				foreach (var SectionBox in SectionBoxes)
+				{
+					BoundingBoxXYZ BBox = SectionBox.get_BoundingBox(CurrentDocument.ActiveView);
+					SectionBoxOutlines.Add(GetOutline(BBox.Transform, BBox));
+				}
 			}
 		}
 
@@ -1015,7 +1016,7 @@ namespace DatasmithRevitExporter
 						ExistingActor?.ResetTags();
 						ElementData.InitializePivotPlacement(ref InWorldTransform);
 						ElementData.InitializeElement(InWorldTransform, ElementData);
-						ElementData.ResetMeshMaterials();
+						ElementData.MeshMaterialsMap.Clear();
 					}
 					else
 					{
@@ -1075,7 +1076,6 @@ namespace DatasmithRevitExporter
 				{
 					// Add the element mesh actor to the Datasmith actor hierarchy.
 					ElementDataStack.Peek().AddChildActor(ElementData);
-					ActorMap[ElemId] = ElementData;
 				}
 			}
 		}
@@ -1125,22 +1125,25 @@ namespace DatasmithRevitExporter
 
 			if (SectionBoxOutlines.Count > 0)
 			{
-				Outline InstanceOutline = GetOutline(InWorldTransform, InInstanceType.get_BoundingBox(CurrentDocument.ActiveView));
+				BoundingBoxXYZ InstanceBoundingBox = InInstanceType.get_BoundingBox(CurrentDocument.ActiveView);
 
-				foreach (Outline SectionBoxOutline in SectionBoxOutlines)
+				if (InstanceBoundingBox != null)
 				{
-					bIntersectedBySectionBox = (SectionBoxOutline.Intersects(InstanceOutline, 0) != SectionBoxOutline.ContainsOtherOutline(InstanceOutline, 0));
-					if (bIntersectedBySectionBox)
+					Outline InstanceOutline = GetOutline(InWorldTransform, InstanceBoundingBox);
+
+					foreach (Outline SectionBoxOutline in SectionBoxOutlines)
 					{
-						break;
+						bIntersectedBySectionBox = (SectionBoxOutline.Intersects(InstanceOutline, 0) != SectionBoxOutline.ContainsOtherOutline(InstanceOutline, 0));
+						if (bIntersectedBySectionBox)
+						{
+							break;
+						}
 					}
 				}
 			}
 
 			FElementData CurrentElementData = ElementDataStack.Peek();
 			FBaseElementData NewInstance = CurrentElementData.PushInstance(InInstanceType, InWorldTransform, !bIntersectedBySectionBox);
-
-			NewInstance.ResetMeshMaterials();
 		}
 
 		public void PopInstance()
@@ -1262,40 +1265,113 @@ namespace DatasmithRevitExporter
 			return ElementDataStack.Peek().MeshPointsTransform;
 		}
 
-		public int GetMeshMaterialIndex(FDatasmithFacadeMesh InMesh, string InMaterialName)
-		{
-			if (InMaterialName.Length == 0)
-			{
-				return 0;
-			}
-
-			string MeshName = InMesh.GetName();
-
-			if (!MeshMaterialsMap.ContainsKey(MeshName))
-			{
-				MeshMaterialsMap[MeshName] = new Dictionary<string, int>();
-			}
-
-			Dictionary<string, int> MaterialsMap = MeshMaterialsMap[MeshName];
-			if (!MaterialsMap.ContainsKey(InMaterialName))
-			{
-				int NewMaterialIndex = MaterialsMap.Count;
-				MaterialsMap[InMaterialName] = NewMaterialIndex;
-				// Add the current Datasmith master material name to the dictionary of material names utilized by the Datasmith mesh being processed.
-				InMesh.AddMaterial(NewMaterialIndex, InMaterialName);
-			}
-
-			return MaterialsMap[InMaterialName];
-		}
-
 		public int GetCurrentMaterialIndex()
 		{
-			return GetMeshMaterialIndex(GetCurrentMesh(), CurrentMaterialName);
+			FElementData ElemData = ElementDataStack.Peek();
+			FBaseElementData InstanceData = ElemData.PeekInstance();
+			FBaseElementData CurrentElement = InstanceData != null ? InstanceData : ElemData;
+
+			if (!CurrentElement.MeshMaterialsMap.ContainsKey(CurrentMaterialName))
+			{
+				int NewMaterialIndex = CurrentElement.MeshMaterialsMap.Count;
+				CurrentElement.MeshMaterialsMap[CurrentMaterialName] = NewMaterialIndex;
+				CurrentElement.ElementMesh.AddMaterial(NewMaterialIndex, CurrentMaterialName);
+			}
+
+			return CurrentElement.MeshMaterialsMap[CurrentMaterialName];
 		}
 
 		public FBaseElementData GetCurrentActor()
 		{
 			return ElementDataStack.Peek().GetCurrentActor();
+		}
+
+		public Element GetCurrentElement()
+		{
+			return ElementDataStack.Count > 0 ? ElementDataStack.Peek().CurrentElement : null;
+		}
+
+		private FBaseElementData OptimizeElementRecursive(FBaseElementData InElementData, FDatasmithFacadeScene InDatasmithScene)
+		{
+			List<FDatasmithFacadeActor> RemoveChildren = new List<FDatasmithFacadeActor>();
+			List<FDatasmithFacadeActor> AddChildren = new List<FDatasmithFacadeActor>();
+
+			for (int ChildIndex = 0; ChildIndex < InElementData.ChildElements.Count; ChildIndex++)
+			{
+				FBaseElementData ChildElement = InElementData.ChildElements[ChildIndex];
+
+				// Optimize the Datasmith child actor.
+				FBaseElementData ResultElement = OptimizeElementRecursive(ChildElement, InDatasmithScene);
+
+				if (ChildElement != ResultElement)
+				{
+					RemoveChildren.Add(ChildElement.ElementActor);
+
+					if (ResultElement != null)
+					{
+						AddChildren.Add(ResultElement.ElementActor);
+					}
+				}
+			}
+
+			foreach (FDatasmithFacadeActor Child in RemoveChildren)
+			{
+				InElementData.ElementActor.RemoveChild(Child);
+			}
+			foreach (FDatasmithFacadeActor Child in AddChildren)
+			{
+				InElementData.ElementActor.AddChild(Child);
+			}
+
+			if (InElementData.bOptimizeHierarchy)
+			{
+				int ChildrenCount = InElementData.ElementActor.GetChildrenCount();
+
+				if (ChildrenCount == 0)
+				{
+					// This Datasmith actor can be removed by optimization.
+					return null;
+				}
+
+				if (ChildrenCount == 1)
+				{
+					Debug.Assert(InElementData.ChildElements.Count == 1);
+
+					// This intermediate Datasmith actor can be removed while keeping its single child actor.
+					FBaseElementData SingleChild = InElementData.ChildElements[0];
+
+					// Make sure the single child actor will not become a dangling component in the actor hierarchy.
+					if (!InElementData.ElementActor.IsComponent() && SingleChild.ElementActor.IsComponent())
+					{
+						SingleChild.ElementActor.SetIsComponent(false);
+					}
+
+					return SingleChild;
+				}
+			}
+
+			return InElementData;
+		}
+
+		public void OptimizeActorHierarchy(FDatasmithFacadeScene InDatasmithScene)
+		{
+			foreach (var ElementEntry in ActorMap)
+			{
+				FBaseElementData ElementData = ElementEntry.Value;
+				FBaseElementData ResultElementData = OptimizeElementRecursive(ElementData, InDatasmithScene);
+
+				if (ResultElementData != ElementData)
+				{
+					if (ResultElementData == null)
+					{
+						InDatasmithScene.RemoveActor(ElementData.ElementActor, FDatasmithFacadeScene.EActorRemovalRule.RemoveChildren);
+					}
+					else
+					{
+						InDatasmithScene.RemoveActor(ElementData.ElementActor, FDatasmithFacadeScene.EActorRemovalRule.KeepChildrenAndKeepRelativeTransform);
+					}
+				}
+			}
 		}
 
 		public void WrapupLink(
@@ -1369,7 +1445,7 @@ namespace DatasmithRevitExporter
 					Document LinkedDoc = (CollectedElement as RevitLinkInstance).GetLinkDocument();
 					if (LinkedDoc != null)
 					{
-						DirectLink.OnBeginLinkedDocument(LinkedDoc);
+						DirectLink.OnBeginLinkedDocument(CollectedElement);
 						foreach (FBaseElementData CurrentChild in ActorEntry.Value.ChildElements)
 						{
 							CurrentChild.AddToScene(InDatasmithScene, ActorEntry.Value, false);

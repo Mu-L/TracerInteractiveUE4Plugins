@@ -3,16 +3,18 @@
 #pragma once
 
 #include "trio/streams/FileStream.h"
+#include "trio/streams/StreamStatus.h"
 #include "trio/types/Aliases.h"
+#include "trio/utils/NativeString.h"
 
 #include <pma/TypeDefs.h>
-#include <status/Provider.h>
 
 #ifdef _MSC_VER
     #pragma warning(push)
     #pragma warning(disable : 4365 4987)
 #endif
 #include <cstddef>
+#include <cstdint>
 #include <fstream>
 #include <ios>
 #ifdef _MSC_VER
@@ -27,23 +29,24 @@ class FileStreamImpl : public FileStream {
 
         void open() override;
         void close() override;
-        std::size_t tell() override;
-        void seek(std::size_t position) override;
-        std::size_t size() override;
-        void read(char* buffer, std::size_t size) override;
-        void write(const char* buffer, std::size_t size) override;
+        std::uint64_t tell() override;
+        void seek(std::uint64_t position) override;
+        std::uint64_t size() override;
+        std::size_t read(char* destination, std::size_t size) override;
+        std::size_t read(Writable* destination, std::size_t size) override;
+        std::size_t write(const char* source, std::size_t size) override;
+        std::size_t write(Readable* source, std::size_t size) override;
 
         MemoryResource* getMemoryResource();
 
     private:
-        static sc::StatusProvider status;
-
         std::fstream file;
-        pma::String<char> path;
-        AccessMode accessMode;
-        OpenMode openMode;
-        std::size_t fileSize;
+        NativeString filePath;
+        AccessMode fileAccessMode;
+        OpenMode fileOpenMode;
+        std::uint64_t fileSize;
         MemoryResource* memRes;
+        StreamStatus status;
 };
 
 }  // namespace trio

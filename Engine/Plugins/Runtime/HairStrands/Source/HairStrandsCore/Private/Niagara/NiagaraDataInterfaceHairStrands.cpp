@@ -7,6 +7,7 @@
 #include "NiagaraSystemInstance.h"
 #include "NiagaraEmitterInstanceBatcher.h"
 
+#include "Components/SkeletalMeshComponent.h"
 #include "ShaderParameterUtils.h"
 #include "ClearQuad.h"
 #include "RenderGraphBuilder.h"
@@ -195,6 +196,11 @@ const FString UNiagaraDataInterfaceHairStrands::DeformedPositionOffsetName(TEXT(
 const FString UNiagaraDataInterfaceHairStrands::BoundingBoxOffsetsName(TEXT("BoundingBoxOffsets_"));
 const FString UNiagaraDataInterfaceHairStrands::BoundingBoxBufferName(TEXT("BoundingBoxBuffer_"));
 const FString UNiagaraDataInterfaceHairStrands::ParamsScaleBufferName(TEXT("ParamsScaleBuffer_"));
+
+//------------------------------------------------------------------------------------------------------------
+
+static int32 GHairSimulationMaxDelay = 4;
+static FAutoConsoleVariableRef CVarHairSimulationMaxDelay(TEXT("r.HairStrands.SimulationMaxDelay"), GHairSimulationMaxDelay, TEXT("Maximum tick Delay before starting the simulation"));
 
 //------------------------------------------------------------------------------------------------------------
 
@@ -589,7 +595,7 @@ struct FNDIHairStrandsParametersCS : public FNiagaraDataInterfaceParametersCS
 			FRHIShaderResourceView* RootBarycentricCoordinatesSRV = (InterpolationModeValue == 1 && RestMeshProjection != nullptr) ?
 				RestMeshProjection->RootTriangleBarycentricBuffer.SRV.GetReference() : FNiagaraRenderer::GetDummyFloatBuffer();
 
-			int32 bNeedSimReset = (ProxyData->TickCount <= MaxDelay ? 1 : 0);
+			int32 bNeedSimReset = (ProxyData->TickCount <= GHairSimulationMaxDelay ? 1 : 0);
 
 			if ((InterpolationModeValue == 1) && ProxyData->GlobalInterpolation)
 			{
@@ -776,6 +782,30 @@ void FNDIHairStrandsProxy::DestroyPerInstanceData(NiagaraEmitterInstanceBatcher*
 
 //------------------------------------------------------------------------------------------------------------
 
+FORCEINLINE bool RequiresSimulationReset(FNiagaraSystemInstance* SystemInstance, uint32& OldSkeletalMeshes)
+{
+	uint32 NewSkeletalMeshes = 0;
+	if (USceneComponent* AttachComponent = SystemInstance->GetAttachComponent())
+	{
+		if (AActor* RootActor = AttachComponent->GetAttachmentRootActor())
+		{
+			for (UActorComponent* ActorComp : RootActor->GetComponents())
+			{
+				USkeletalMeshComponent* SkelMeshComp = Cast<USkeletalMeshComponent>(ActorComp);
+				if (SkelMeshComp && SkelMeshComp->SkeletalMesh)
+				{
+					NewSkeletalMeshes += GetTypeHash(SkelMeshComp->SkeletalMesh->GetName());
+				}
+			}
+		}
+	}
+	bool bNeedReset = NewSkeletalMeshes != OldSkeletalMeshes;
+	OldSkeletalMeshes = NewSkeletalMeshes;
+	return bNeedReset;
+}
+
+//------------------------------------------------------------------------------------------------------------
+
 UNiagaraDataInterfaceHairStrands::UNiagaraDataInterfaceHairStrands(FObjectInitializer const& ObjectInitializer)
 	: Super(ObjectInitializer)
 	, DefaultSource(nullptr)
@@ -936,18 +966,19 @@ bool UNiagaraDataInterfaceHairStrands::PerInstanceTick(void* PerInstanceData, FN
 	UGroomAsset* GroomAsset = nullptr;
 	int32 GroupIndex = 0;
 
-	InstanceData->TickCount = FMath::Min(MaxDelay+1,InstanceData->TickCount+1);
+	InstanceData->TickCount = FMath::Min(GHairSimulationMaxDelay +1,InstanceData->TickCount+1);
 
 	ExtractDatasAndResources(SystemInstance, StrandsDatas, StrandsRestResource, StrandsDeformedResource, StrandsRestRootResource, StrandsDeformedRootResource, GroomAsset, GroupIndex);
 	InstanceData->HairStrandsBuffer->Update(StrandsDatas, StrandsRestResource, StrandsDeformedResource, StrandsRestRootResource, StrandsDeformedRootResource);
 
 	if (SourceComponent != nullptr)
 	{
-		if (SourceComponent->bResetSimulation)
+		const bool bRequiresReset = SourceComponent->bResetSimulation || RequiresSimulationReset(SystemInstance, InstanceData->SkeletalMeshes);
+		if (bRequiresReset)
 		{
 			InstanceData->TickCount = 0;
 		}
-		InstanceData->ForceReset = SourceComponent->bResetSimulation;
+		InstanceData->ForceReset = bRequiresReset;
 	}
 	InstanceData->Update(this, SystemInstance, StrandsDatas, GroomAsset, GroupIndex);
 	return false;
@@ -3428,7 +3459,7 @@ bool UNiagaraDataInterfaceHairStrands::GetFunctionHLSL(const FNiagaraDataInterfa
 		static const TCHAR *FormatSample = TEXT(R"(
 				void {InstanceFunctionName} (in int BoxIndex, out float3 OutBoxCenter, out float3 OutBoxExtent)
 				{
-					{HairStrandsContextName} DIHairStrands_GetBoundingBox(DIContext,BoxIndex,OutBoxCenter,OutBoxExtent);
+					{HairStrandsContextName} DIHairStrands_GetBoundingBox(DIContext,DIContext_BoundingBoxBuffer,BoxIndex,OutBoxCenter,OutBoxExtent);
 				}
 				)");
 		OutHLSL += FString::Format(FormatSample, ArgsSample);
@@ -3439,7 +3470,7 @@ bool UNiagaraDataInterfaceHairStrands::GetFunctionHLSL(const FNiagaraDataInterfa
 		static const TCHAR *FormatSample = TEXT(R"(
 				void {InstanceFunctionName} (out bool FunctionStatus)
 				{
-					{HairStrandsContextName} DIHairStrands_ResetBoundingBox(DIContext,FunctionStatus);
+					{HairStrandsContextName} DIHairStrands_ResetBoundingBox(DIContext,DIContext_BoundingBoxBuffer,FunctionStatus);
 				}
 				)");
 		OutHLSL += FString::Format(FormatSample, ArgsSample);
@@ -3450,7 +3481,7 @@ bool UNiagaraDataInterfaceHairStrands::GetFunctionHLSL(const FNiagaraDataInterfa
 		static const TCHAR *FormatSample = TEXT(R"(
 					void {InstanceFunctionName} (in float3 NodePosition, out bool OutFunctionStatus)
 					{
-						{HairStrandsContextName} DIHairStrands_BuildBoundingBox(DIContext,NodePosition,OutFunctionStatus);
+						{HairStrandsContextName} DIHairStrands_BuildBoundingBox(DIContext,DIContext_BoundingBoxBuffer,NodePosition,OutFunctionStatus);
 					}
 					)");
 		OutHLSL += FString::Format(FormatSample, ArgsSample);
@@ -3811,6 +3842,30 @@ void UNiagaraDataInterfaceHairStrands::GetCommonHLSL(FString& OutHLSL)
 	OutHLSL += TEXT("#include \"/Plugin/Runtime/HairStrands/Private/NiagaraCosseratRodMaterial.ush\"\n");
 	OutHLSL += TEXT("#include \"/Plugin/Runtime/HairStrands/Private/NiagaraStaticCollisionConstraint.ush\"\n");
 	OutHLSL += TEXT("#include \"/Plugin/Runtime/HairStrands/Private/NiagaraDataInterfaceHairStrands.ush\"\n");
+}
+
+bool UNiagaraDataInterfaceHairStrands::AppendCompileHash(FNiagaraCompileHashVisitor* InVisitor) const
+{
+	if (!Super::AppendCompileHash(InVisitor))
+		return false;
+
+	for (const TCHAR* VirtualFilePath :
+		{
+			TEXT("/Plugin/Runtime/HairStrands/Private/NiagaraQuaternionUtils.ush"),
+			TEXT("/Plugin/Runtime/HairStrands/Private/NiagaraStrandsExternalForce.ush"),
+			TEXT("/Plugin/Runtime/HairStrands/Private/NiagaraHookeSpringMaterial.ush"),
+			TEXT("/Plugin/Runtime/HairStrands/Private/NiagaraAngularSpringMaterial.ush"),
+			TEXT("/Plugin/Runtime/HairStrands/Private/NiagaraConstantVolumeMaterial.ush"),
+			TEXT("/Plugin/Runtime/HairStrands/Private/NiagaraCosseratRodMaterial.ush"),
+			TEXT("/Plugin/Runtime/HairStrands/Private/NiagaraStaticCollisionConstraint.ush"),
+			TEXT("/Plugin/Runtime/HairStrands/Private/NiagaraDataInterfaceHairStrands.ush")
+		})
+	{
+		FSHAHash Hash = GetShaderFileHash(VirtualFilePath, EShaderPlatform::SP_PCD3D_SM5);
+		InVisitor->UpdateString(TEXT("NiagaraDataInterfaceHairStrandsHLSLSource"), Hash.ToString());
+	}
+
+	return true;
 }
 
 void UNiagaraDataInterfaceHairStrands::GetParameterDefinitionHLSL(const FNiagaraDataInterfaceGPUParamInfo& ParamInfo, FString& OutHLSL)

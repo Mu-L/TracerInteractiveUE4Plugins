@@ -1137,7 +1137,7 @@ static bool FilterNodesRecursive(FSequencer& Sequencer, const TSharedRef<FSequen
 		{
 			bIsTrackOrObjectBinding = true;
 
-			const FSequencerObjectBindingNode ObjectNode = static_cast<const FSequencerObjectBindingNode&>(StartNode.Get());
+			const FSequencerObjectBindingNode& ObjectNode = static_cast<const FSequencerObjectBindingNode&>(StartNode.Get());
 			for (TWeakObjectPtr<>& Object : Sequencer.FindObjectsInCurrentSequence(ObjectNode.GetObjectBinding()))
 			{
 				if (Object.IsValid() && (Filters->Num() == 0 || Filters->PassesAnyFilters(Object.Get(), StartNode->GetDisplayName()))
@@ -1198,7 +1198,7 @@ static bool FilterNodesRecursive(FSequencer& Sequencer, const TSharedRef<FSequen
 		}
 		case ESequencerNode::KeyArea:
 		{
-			const FSequencerSectionKeyAreaNode KeyAreaNode = static_cast<const FSequencerSectionKeyAreaNode&>(StartNode.Get());
+			const FSequencerSectionKeyAreaNode& KeyAreaNode = static_cast<const FSequencerSectionKeyAreaNode&>(StartNode.Get());
 			for (const TSharedRef<IKeyArea>& KeyArea : KeyAreaNode.GetAllKeyAreas())
 			{
 				FMovieSceneChannel* Channel = KeyArea->ResolveChannel();
@@ -1371,13 +1371,16 @@ void FSequencerNodeTree::UpdateFilters()
 	bFilterUpdateRequested = false;
 
 	// Count the total number of display nodes
-	TSet<TSharedRef<FSequencerDisplayNode>> Nodes;
-	for (const TSharedRef<FSequencerDisplayNode>& Node : GetRootNodes())
-	{
-		SequencerHelpers::GetDescendantNodes(RootNode, Nodes);
-	}
+	DisplayNodeCount = 0;
 
-	DisplayNodeCount = Nodes.Num();
+	RootNode->Traverse_ParentFirst(
+		[this](FSequencerDisplayNode& InNode)
+		{
+			++this->DisplayNodeCount;
+			return true;
+		}
+		, false
+	);
 }
 
 void FSequencerNodeTree::FilterNodes(const FString& InFilter)
