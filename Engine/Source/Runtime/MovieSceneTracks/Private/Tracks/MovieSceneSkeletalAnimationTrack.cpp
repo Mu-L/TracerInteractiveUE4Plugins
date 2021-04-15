@@ -88,6 +88,31 @@ TArray<UMovieSceneSection*> UMovieSceneSkeletalAnimationTrack::GetAnimSectionsAt
 
 void UMovieSceneSkeletalAnimationTrack::PostLoad()
 {
+	// UMovieSceneTrack::PostLoad removes null sections. However, RemoveAtSection requires SetupRootMotions, which accesses AnimationSections, so remove null sections here before anything else 
+	for (int32 SectionIndex = 0; SectionIndex < AnimationSections.Num(); )
+	{
+		UMovieSceneSection* Section = AnimationSections[SectionIndex];
+
+		if (Section == nullptr)
+		{
+#if WITH_EDITOR
+			UE_LOG(LogMovieScene, Warning, TEXT("Removing null section from %s:%s"), *GetPathName(), *GetDisplayName().ToString());
+#endif
+			AnimationSections.RemoveAt(SectionIndex);
+		}
+		else if (Section->GetRange().IsEmpty())
+		{
+#if WITH_EDITOR
+			//UE_LOG(LogMovieScene, Warning, TEXT("Removing section %s:%s with empty range"), *GetPathName(), *GetDisplayName().ToString());
+#endif
+			AnimationSections.RemoveAt(SectionIndex);
+		}
+		else
+		{
+			++SectionIndex;
+		}
+	}
+
 	Super::PostLoad();
 
 	if (GetLinkerCustomVersion(FMovieSceneEvaluationCustomVersion::GUID) < FMovieSceneEvaluationCustomVersion::AddBlendingSupport)
@@ -233,7 +258,7 @@ void UMovieSceneSkeletalAnimationTrack::OnSectionMoved(UMovieSceneSection& Secti
 
 void UMovieSceneSkeletalAnimationTrack::SortSections()
 {
-	AnimationSections.Sort([](UMovieSceneSection& A,  UMovieSceneSection& B) {return ((A).GetTrueRange().GetLowerBoundValue() < (B).GetTrueRange().GetLowerBoundValue());});
+	AnimationSections.Sort([](const UMovieSceneSection& A, const UMovieSceneSection& B) {return ((A).GetTrueRange().GetLowerBoundValue() < (B).GetTrueRange().GetLowerBoundValue());});
 }
 
 //expectation is the weights may be unnormalized.
@@ -451,26 +476,45 @@ void UMovieSceneSkeletalAnimationTrack::SetUpRootMotions(bool bForce)
 	{
 		return;
 	}
-
+	
 	if (bForce || RootMotionParams.bRootMotionsDirty)
 	{
 		RootMotionParams.bRootMotionsDirty = false;
+
+		const FFrameRate MinDisplayRate(60, 1);
+
+		FFrameRate DisplayRate =  MovieScene->GetDisplayRate().AsDecimal() < MinDisplayRate.AsDecimal() ? MinDisplayRate : MovieScene->GetDisplayRate();
+		FFrameRate TickResolution = MovieScene->GetTickResolution();
+		FFrameTime FrameTick = FFrameTime(FMath::Max(1, TickResolution.AsFrameNumber(1.0).Value / DisplayRate.AsFrameNumber(1.0).Value));
+		if (FrameTick.FrameNumber.Value == 0)
+		{
+			RootMotionParams.RootTransforms.SetNum(0);
+			return;
+		}
+
 		if (AnimationSections.Num() == 0)
 		{
 			RootMotionParams.RootTransforms.SetNum(0);
 			return;
 		}
+		
 		SortSections();
 		//Set the TempOffset.
 		FTransform InitialTransform = FTransform::Identity;
 		UMovieSceneSkeletalAnimationSection* PrevAnimSection = nullptr;
 		//valid anim sequence to use to calculate bones.
 		UAnimSequenceBase* ValidAnimSequence = nullptr;
+		//if no transforms have offsets then don't do root motion caching.
+		bool bAnySectionsHaveOffset = false;
 		for (UMovieSceneSection* Section : AnimationSections)
 		{
 			UMovieSceneSkeletalAnimationSection* AnimSection = Cast<UMovieSceneSkeletalAnimationSection>(Section);
 			if (AnimSection)
 			{
+				if (AnimSection->GetOffsetTransform().Equals(FTransform::Identity, 1e-3f) == false)
+				{
+					bAnySectionsHaveOffset = true;
+				}
 				if (ValidAnimSequence == nullptr)
 				{
 					ValidAnimSequence = AnimSection->Params.Animation;
@@ -488,8 +532,17 @@ void UMovieSceneSkeletalAnimationTrack::SetUpRootMotions(bool bForce)
 				AnimSection->SetBoneIndexForRootMotionCalculations(bBlendFirstChildOfRoot);
 			}
 		}
+
+		if (bAnySectionsHaveOffset == false)
+		{
+			//no root transforms so bail
+			RootMotionParams.RootTransforms.SetNum(0);
+			return;
+		}
 		//set up pose from valid anim sequences.
+		FMemMark Mark(FMemStack::Get());
 		FCompactPose OutPose;
+
 		if (ValidAnimSequence)
 		{
 			TArray<FBoneIndexType> RequiredBoneIndexArray;
@@ -502,13 +555,12 @@ void UMovieSceneSkeletalAnimationTrack::SetUpRootMotions(bool bForce)
 
 			FBoneContainer BoneContainer(RequiredBoneIndexArray, CurveEvalOption, *ValidAnimSequence->GetSkeleton());
 			OutPose.ResetToRefPose(BoneContainer);
+			FBlendedCurve OutCurve;
+			OutCurve.InitFrom(BoneContainer);
 			TArray< UMovieSceneSkeletalAnimationSection*> SectionsAtCurrentTime;
 			RootMotionParams.StartFrame = AnimationSections[0]->GetInclusiveStartFrame();
 			RootMotionParams.EndFrame = AnimationSections[AnimationSections.Num() - 1]->GetExclusiveEndFrame() - 1;
-
-			FFrameRate DisplayRate = MovieScene->GetDisplayRate();
-			FFrameRate TickResolution = MovieScene->GetTickResolution();
-			RootMotionParams.FrameTick = FFrameTime(TickResolution.AsFrameNumber(1.0).Value / DisplayRate.AsFrameNumber(1.0).Value);
+			RootMotionParams.FrameTick = FrameTick;
 
 			int32 NumTotal = (RootMotionParams.EndFrame.FrameNumber.Value - RootMotionParams.StartFrame.FrameNumber.Value) / (RootMotionParams.FrameTick.FrameNumber.Value) + 1;
 			RootMotionParams.RootTransforms.SetNum(NumTotal);
@@ -531,7 +583,6 @@ void UMovieSceneSkeletalAnimationTrack::SetUpRootMotions(bool bForce)
 					{
 						UMovieSceneSkeletalAnimationSection* AnimSection = CastChecked<UMovieSceneSkeletalAnimationSection>(Section);
 
-						FBlendedCurve OutCurve;
 						FStackCustomAttributes TempAttributes;
 						FAnimationPoseData AnimationPoseData(OutPose, OutCurve, TempAttributes);
 						bool bIsAdditive = false;

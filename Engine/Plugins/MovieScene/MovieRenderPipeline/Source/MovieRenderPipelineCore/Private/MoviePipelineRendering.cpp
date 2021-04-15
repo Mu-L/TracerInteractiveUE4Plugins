@@ -64,6 +64,16 @@ void UMoviePipeline::SetupRenderingPipelineForShot(UMoviePipelineExecutorShot* I
 	// Then increase each sub-region by the overlap amount.
 	BackbufferResolution = HighResSettings->CalculatePaddedBackbufferSize(BackbufferResolution);
 
+	{
+		int32 MaxResolution = GetMax2DTextureDimension();
+		if (BackbufferResolution.X > MaxResolution || BackbufferResolution.Y > MaxResolution)
+		{
+			UE_LOG(LogMovieRenderPipeline, Error, TEXT("Resolution %dx%d exceeds maximum allowed by GPU (%dx%d). Consider using the HighRes setting and increasing the tile count."), BackbufferResolution.X, BackbufferResolution.Y, MaxResolution, MaxResolution);
+			Shutdown(true);
+			return;
+		}
+	}
+
 	// Note how many tiles we wish to render with.
 	BackbufferTileCount = FIntPoint(HighResSettings->TileCount, HighResSettings->TileCount);
 
@@ -168,13 +178,6 @@ void UMoviePipeline::RenderFrame()
 
 	// Update our current view location
 	LocalPlayerController->GetPlayerViewPoint(FrameInfo.CurrViewLocation, FrameInfo.CurrViewRotation);
-
-	if (!CurrentCameraCut.bHasEvaluatedMotionBlurFrame)
-	{
-		// There won't be a valid Previous if we haven't done motion blur.
-		FrameInfo.PrevViewLocation = FrameInfo.CurrViewLocation;
-		FrameInfo.PrevViewRotation = FrameInfo.CurrViewRotation;
-	}
 
 	// Add appropriate metadata here that is shared by all passes.
 	{

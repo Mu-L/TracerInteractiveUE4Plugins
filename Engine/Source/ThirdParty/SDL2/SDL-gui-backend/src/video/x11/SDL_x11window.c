@@ -850,6 +850,13 @@ X11_SetWindowPosition(_THIS, SDL_Window * window)
 {
     SDL_WindowData *data = (SDL_WindowData *) window->driverdata;
     Display *display = data->videodata->display;
+
+/* The else bit seems to be causing a crash on some WM */
+/* EG BEGIN */
+#ifdef SDL_WITH_EPIC_EXTENSIONS
+    X11_XMoveWindow(display, data->xwindow, window->x - data->border_left, window->y - data->border_top);
+    X11_XFlush(display);
+#else
     unsigned int childCount;
     Window childReturn, root, parent;
     Window* children;
@@ -863,8 +870,9 @@ X11_SetWindowPosition(_THIS, SDL_Window * window)
     X11_XTranslateCoordinates(display, parent, DefaultRootWindow(display),
                               attrs.x, attrs.y, &orig_x, &orig_y, &childReturn);
 
-    /*Attempt to move the window*/
+    /* Attempt to move the window */
     X11_XMoveWindow(display, data->xwindow, window->x - data->border_left, window->y - data->border_top);
+
 
     /* Wait a brief time to see if the window manager decided to let this move happen.
        If the window changes at all, even to an unexpected value, we break out. */
@@ -890,6 +898,7 @@ X11_SetWindowPosition(_THIS, SDL_Window * window)
 
         SDL_Delay(10);
     }
+#endif /* SDL_WITH_EPIC_EXTENSIONS */
 }
 
 void

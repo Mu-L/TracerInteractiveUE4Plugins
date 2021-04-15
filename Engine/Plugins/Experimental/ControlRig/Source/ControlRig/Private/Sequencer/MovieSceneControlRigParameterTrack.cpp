@@ -319,7 +319,7 @@ UMovieSceneSection* UMovieSceneControlRigParameterTrack::GetSectionToKey() const
 void UMovieSceneControlRigParameterTrack::PostLoad()
 {
 	Super::PostLoad();
-	if (ControlRig && ControlRig->GetObjectBinding() && !ControlRig->HasAnyFlags(RF_NeedLoad | RF_NeedPostLoad | RF_NeedInitialization))
+	if (ControlRig && !ControlRig->HasAnyFlags(RF_NeedLoad | RF_NeedPostLoad | RF_NeedInitialization))
 	{
 		ControlRig->ConditionalPostLoad();
 		ControlRig->Initialize();
@@ -330,8 +330,7 @@ void UMovieSceneControlRigParameterTrack::PostLoad()
 				UMovieSceneControlRigParameterSection* CRSection = Cast<UMovieSceneControlRigParameterSection>(Section);
 				if (CRSection)
 				{
-					CRSection->ControlRig = ControlRig;
-					CRSection->ReconstructChannelProxy(true);
+					CRSection->RecreateWithThisControlRig(ControlRig, false);
 				}
 			}
 		}

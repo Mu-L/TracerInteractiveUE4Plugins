@@ -590,7 +590,7 @@ FVulkanSurface::FVulkanSurface(FVulkanDevice& InDevice, FVulkanEvictable* Owner,
 		}
 
 		VkDevice VulkanDevice = InDevice.GetInstanceHandle();
-		VkMemoryPropertyFlags BufferMemFlags = (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+		VkMemoryPropertyFlags BufferMemFlags = (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
 		
 		VkBufferCreateInfo BufferCreateInfo;
 		ZeroVulkanStruct(BufferCreateInfo, VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO);
@@ -701,7 +701,7 @@ FVulkanSurface::FVulkanSurface(FVulkanDevice& InDevice, FVulkanEvictable* Owner,
 	}
 }
 
-void FVulkanSurface::MoveSurface(FVulkanDevice& InDevice, FVulkanAllocation& NewAllocation)
+void FVulkanSurface::MoveSurface(FVulkanDevice& InDevice, FVulkanCommandListContext& Context, FVulkanAllocation& NewAllocation)
 {
 	FImageCreateInfo ImageCreateInfo;
 	FVulkanSurface::GenerateImageCreateInfo(ImageCreateInfo,
@@ -709,8 +709,6 @@ void FVulkanSurface::MoveSurface(FVulkanDevice& InDevice, FVulkanAllocation& New
 		PixelFormat, Width, Height, Depth,
 		ArraySize, NumMips, NumSamples, UEFlags,
 		&StorageFormat, &ViewFormat);
-	FRHICommandListImmediate& RHICmdList = FRHICommandListExecutor::GetImmediateCommandList();
-	FVulkanCommandListContext& Context = (FVulkanCommandListContext&)RHICmdList.GetContext();
 
 	VkImage MovedImage;
 	VERIFYVULKANRESULT(VulkanRHI::vkCreateImage(InDevice.GetInstanceHandle(), &ImageCreateInfo.ImageCreateInfo, VULKAN_CPU_ALLOCATOR, &MovedImage));
@@ -803,7 +801,7 @@ void FVulkanSurface::MoveSurface(FVulkanDevice& InDevice, FVulkanAllocation& New
 }
 
 
-void FVulkanSurface::OnFullDefrag(FVulkanDevice& InDevice, uint32 NewOffset)
+void FVulkanSurface::OnFullDefrag(FVulkanDevice& InDevice, FVulkanCommandListContext& Context, uint32 NewOffset)
 {
 	FImageCreateInfo ImageCreateInfo;
 	FVulkanSurface::GenerateImageCreateInfo(ImageCreateInfo,
@@ -811,8 +809,6 @@ void FVulkanSurface::OnFullDefrag(FVulkanDevice& InDevice, uint32 NewOffset)
 		PixelFormat, Width, Height, Depth,
 		ArraySize, NumMips, NumSamples, UEFlags,
 		&StorageFormat, &ViewFormat);
-	FRHICommandListImmediate& RHICmdList = FRHICommandListExecutor::GetImmediateCommandList();
-	FVulkanCommandListContext& Context = (FVulkanCommandListContext&)RHICmdList.GetContext();
 
 	VkImage MovedImage;
 	VERIFYVULKANRESULT(VulkanRHI::vkCreateImage(InDevice.GetInstanceHandle(), &ImageCreateInfo.ImageCreateInfo, VULKAN_CPU_ALLOCATOR, &MovedImage));
@@ -1094,6 +1090,13 @@ FVulkanSurface::FVulkanSurface(FVulkanDevice& InDevice, VkImageViewType Resource
 			InitialLayout = (UEFlags & TexCreate_DepthStencilTargetable) ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 			bOnlyAddToLayoutManager = false;
 			bDoInitialClear = true;
+		}
+		else if (UEFlags & TexCreate_Foveation)
+		{
+			// If it's a foveation texture, do not clear but add to layoutmgr, and set correct foveation layout. 
+			InitialLayout = VK_IMAGE_LAYOUT_FRAGMENT_DENSITY_MAP_OPTIMAL_EXT;
+			bOnlyAddToLayoutManager = true;
+			bDoInitialClear = false;
 		}
 		else
 		{
@@ -2395,7 +2398,7 @@ void FVulkanSurface::Evict(FVulkanDevice& Device_)
 {
 	checkNoEntry(); //not supported
 }
-void FVulkanSurface::Move(FVulkanDevice& Device_ , FVulkanAllocation& NewAllocation)
+void FVulkanSurface::Move(FVulkanDevice& Device_, FVulkanCommandListContext& Context, FVulkanAllocation& NewAllocation)
 {
 	checkNoEntry(); //not supported
 }
@@ -2435,7 +2438,7 @@ void FVulkanTextureBase::InvalidateViews(FVulkanDevice& Device)
 	}
 }
 
-void FVulkanTextureBase::Move(FVulkanDevice& Device, FVulkanAllocation& NewAllocation)
+void FVulkanTextureBase::Move(FVulkanDevice& Device, FVulkanCommandListContext& Context, FVulkanAllocation& NewAllocation)
 {
 	FRHITexture* Tex = GetRHITexture();
 	uint64 Size = Surface.GetMemorySize();
@@ -2447,11 +2450,11 @@ void FVulkanTextureBase::Move(FVulkanDevice& Device, FVulkanAllocation& NewAlloc
 		UE_LOG(LogVulkanRHI, Display, TEXT("Evicted %8.4fkb %8.4fkb   TB %p // %p  :: IMG %p   %-40s\n"), Size / (1024.f), TotalSize / (1024.f), this, &Surface, Surface.Image, *GetResourceFName().ToString());
 	}
 
-	Surface.MoveSurface(Device, NewAllocation);
+	Surface.MoveSurface(Device, Context, NewAllocation);
 	InvalidateViews(Device);
 }
 
-void FVulkanTextureBase::OnFullDefrag(FVulkanDevice& Device, uint32 NewOffset)
+void FVulkanTextureBase::OnFullDefrag(FVulkanDevice& Device, FVulkanCommandListContext& Context, uint32 NewOffset)
 {
 	FRHITexture* Tex = GetRHITexture();
 	uint64 Size = Surface.GetMemorySize();
@@ -2463,7 +2466,7 @@ void FVulkanTextureBase::OnFullDefrag(FVulkanDevice& Device, uint32 NewOffset)
 		UE_LOG(LogVulkanRHI, Display, TEXT("Evicted %8.4fkb %8.4fkb   TB %p // %p  :: IMG %p   %-40s\n"), Size / (1024.f), TotalSize / (1024.f), this, &Surface, Surface.Image, *GetResourceFName().ToString());
 	}
 
-	Surface.OnFullDefrag(Device, NewOffset);
+	Surface.OnFullDefrag(Device, Context, NewOffset);
 	InvalidateViews(Device);
 }
 
@@ -2534,7 +2537,7 @@ FVulkanTexture2D::FVulkanTexture2D(FTextureRHIRef& SrcTextureRHI, const FVulkanT
 
 FVulkanTexture2D::~FVulkanTexture2D()
 {
-	if ((Surface.UEFlags & (TexCreate_DepthStencilTargetable | TexCreate_RenderTargetable | TexCreate_ResolveTargetable)) != 0)
+	if (Surface.IsImageOwner() && (Surface.UEFlags & (TexCreate_DepthStencilTargetable | TexCreate_RenderTargetable | TexCreate_ResolveTargetable)) != 0)
 	{
 		Surface.Device->NotifyDeletedRenderTarget(Surface.Image);
 	}
@@ -2586,7 +2589,7 @@ FVulkanTextureCube::FVulkanTextureCube(FTextureRHIRef& SrcTextureRHI, const FVul
 
 FVulkanTextureCube::~FVulkanTextureCube()
 {
-	if ((GetFlags() & (TexCreate_DepthStencilTargetable | TexCreate_RenderTargetable | TexCreate_ResolveTargetable)) != 0) 
+	if (Surface.IsImageOwner() && (GetFlags() & (TexCreate_DepthStencilTargetable | TexCreate_RenderTargetable | TexCreate_ResolveTargetable)) != 0)
 	{
 		Surface.Device->NotifyDeletedRenderTarget(Surface.Image);
 	}
@@ -2601,7 +2604,7 @@ FVulkanTexture3D::FVulkanTexture3D(FVulkanDevice& Device, EPixelFormat Format, u
 
 FVulkanTexture3D::~FVulkanTexture3D()
 {
-	if ((GetFlags() & (TexCreate_DepthStencilTargetable | TexCreate_RenderTargetable | TexCreate_ResolveTargetable)) != 0) 
+	if (Surface.IsImageOwner() && (GetFlags() & (TexCreate_DepthStencilTargetable | TexCreate_RenderTargetable | TexCreate_ResolveTargetable)) != 0)
 	{
 		Surface.Device->NotifyDeletedRenderTarget(Surface.Image);
 	}
@@ -3014,5 +3017,5 @@ void FVulkanCommandListContext::RHICopyBufferRegion(FRHIVertexBuffer* DstBuffer,
 	VulkanRHI::vkCmdCopyBuffer(VkCmdBuffer, SrcBufferVk->GetHandle(), DstBufferVk->GetHandle(), 1, &Region);
 
 	VkMemoryBarrier BarrierAfter = { VK_STRUCTURE_TYPE_MEMORY_BARRIER, nullptr, VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT };
-	VulkanRHI::vkCmdPipelineBarrier(VkCmdBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &BarrierAfter, 1, nullptr, 0, nullptr);
+	VulkanRHI::vkCmdPipelineBarrier(VkCmdBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &BarrierAfter, 0, nullptr, 0, nullptr);
 }

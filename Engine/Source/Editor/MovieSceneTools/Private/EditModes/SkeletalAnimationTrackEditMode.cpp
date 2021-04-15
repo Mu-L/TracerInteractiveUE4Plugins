@@ -119,10 +119,10 @@ void FSkeletalAnimationTrackEditMode::Exit()
 	FEdMode::Exit();
 }
 
+//todo remove me in UE5
 void FSkeletalAnimationTrackEditMode::Tick(FEditorViewportClient* ViewportClient, float DeltaTime)
 {
 	FEdMode::Tick(ViewportClient, DeltaTime);
-	ViewportClient->Invalidate();
 }
 
 static USkeletalMeshComponent* AcquireSkeletalMeshFromObject(UObject* BoundObject)
@@ -377,10 +377,12 @@ void FSkeletalAnimationTrackEditMode::Render(const FSceneView* View, FViewport* 
 										if (AnimSequence)
 										{
 											int32 Index = AnimSection->SetBoneIndexForRootMotionCalculations(SkelAnimTrack->bBlendFirstChildOfRoot);
+											FMemMark Mark(FMemStack::Get());	
 											FCompactPose OutPose;
 											OutPose.ResetToRefPose(SkelMeshComp->GetAnimInstance()->GetRequiredBones());
 
 											FBlendedCurve OutCurve;
+											OutCurve.InitFrom(SkelMeshComp->GetAnimInstance()->GetRequiredBones());
 											FStackCustomAttributes TempAttributes;
 											FAnimationPoseData OutAnimationPoseData(OutPose, OutCurve, TempAttributes);
 

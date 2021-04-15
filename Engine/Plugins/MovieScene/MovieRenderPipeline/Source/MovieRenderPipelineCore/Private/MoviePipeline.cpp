@@ -496,6 +496,13 @@ void UMoviePipeline::TransitionToState(const EMovieRenderPipelineState InNewStat
 
 			// This is called once notifying our export step that they can begin the export.
 			PipelineState = EMovieRenderPipelineState::Export;
+
+			// Restore the sequence so that the export processes can operate on the original sequence. 
+			// This is also done in the finished state because it's not guaranteed that the Export state 
+			// will be set when the render is canceled early
+			LevelSequenceActor->GetSequencePlayer()->Stop();
+			RestoreTargetSequenceToOriginalState();
+	
 			BeginExport();
 		}
 		break;
@@ -1551,6 +1558,11 @@ void UMoviePipeline::ResolveFilenameFormatArguments(const FString& InFormatStrin
 	// No extension should be provided at this point, because we need to tack the extension onto the end after appending numbers (in the event of no overwrites)
 	FString BaseFilename = FString::Format(*InFormatString, OutFinalFormatArgs.FilenameArguments);
 	FPaths::NormalizeFilename(BaseFilename);
+
+	if (FPaths::IsRelative(BaseFilename))
+	{
+		BaseFilename = FPaths::ConvertRelativePathToFull(BaseFilename);
+	}
 
 	// If we end with a "." character, remove it. The extension will put it back on. We can end up with this sometimes after resolving file format strings, ie:
 	// {sequence_name}.{frame_number} becomes {sequence_name}. for videos (which can't use frame_numbers).

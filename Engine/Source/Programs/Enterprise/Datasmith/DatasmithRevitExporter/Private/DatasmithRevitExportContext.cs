@@ -185,11 +185,13 @@ namespace DatasmithRevitExporter
 		)
 		{
 			// Forget the active Revit document being exported.
-			PopDocument();
+			FDocumentData DocumentData = PopDocument();
 
 			// Check if this is regular file export.
 			if (DirectLink == null)
 			{
+				DocumentData.OptimizeActorHierarchy(DatasmithScene);
+
 				// Build and export the Datasmith scene instance and its scene element assets.
 				DatasmithScene.ExportScene(CurrentDatasmithFilePath);
 
@@ -556,7 +558,7 @@ namespace DatasmithRevitExporter
 
 									foreach (string TexturePath in TexturePaths)
 									{
-										ExtraTexturePaths.Add(TexturePath);
+										ExtraTexturePaths.Add(Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, TexturePath)));
 									}
 
 									break;
@@ -580,15 +582,17 @@ namespace DatasmithRevitExporter
 			bool bInAddLocationActors = true
 		)
 		{
+			if (DocumentDataStack.Count > 0 && DirectLink != null)
+			{
+				// This is a linked document, store it's root element
+				Element LinkedDocElement = DocumentDataStack.Peek().GetCurrentElement();
+				DirectLink.OnBeginLinkedDocument(LinkedDocElement);
+			}
+
 			// Check if we have cache for this document.
 			FDocumentData DocumentData = new FDocumentData(InDocument, ref MessageList, DirectLink);
 
 			DocumentDataStack.Push(DocumentData);
-
-			if (DocumentDataStack.Count > 1 && DirectLink != null)
-			{
-				DirectLink.OnBeginLinkedDocument(InDocument);
-			}
 
 			if (bInAddLocationActors)
 			{
@@ -598,7 +602,7 @@ namespace DatasmithRevitExporter
 			ExportedDocuments.Add(DocumentData);
 		}
 
-		private void PopDocument()
+		private FDocumentData PopDocument()
 		{
 			FDocumentData DocumentData = DocumentDataStack.Pop();
 
@@ -611,6 +615,8 @@ namespace DatasmithRevitExporter
 				DocumentData.WrapupLink(DatasmithScene, DocumentDataStack.Peek().GetCurrentActor(), UniqueTextureNameSet);
 				DirectLink?.OnEndLinkedDocument();
 			}
+
+			return DocumentData;
 		}
 
 		private bool PushElement(

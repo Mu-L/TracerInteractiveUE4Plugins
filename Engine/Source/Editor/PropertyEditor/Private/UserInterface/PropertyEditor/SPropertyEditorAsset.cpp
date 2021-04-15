@@ -367,14 +367,15 @@ void SPropertyEditorAsset::Construct(const FArguments& InArgs, const TSharedPtr<
 		const FProperty* PropToConsider = GetActualMetadataProperty(Property);
 		if (PropToConsider->HasAnyPropertyFlags(CPF_EditConst | CPF_DisableEditOnTemplate))
 		{
-			// There are some cases where editing an Actor Property is not allowed, such as when it is contained within a struct or a CDO
 			TArray<UObject*> ObjectList;
 			if (PropertyEditor.IsValid())
 			{
 				PropertyEditor->GetPropertyHandle()->GetOuterObjects(ObjectList);
 			}
 
-			// If there is no objects, that means we must have a struct asset managing this property
+			// NOTE: This code decides that 99% of structs are "defaults" which is not technically correct, 
+			// but we want to stop hard actor references from being set in places like data tables without banning soft references.
+			// The actor check should get refactored to be independent of EditOnTemplate and do more explicit checks for world-owned object references
 			if (ObjectList.Num() == 0)
 			{
 				IsEnabledAttribute.Set(false);

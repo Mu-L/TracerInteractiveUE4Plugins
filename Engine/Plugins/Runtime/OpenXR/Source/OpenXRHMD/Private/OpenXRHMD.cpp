@@ -49,7 +49,7 @@ static TAutoConsoleVariable<int32> CVarEnableOpenXRValidationLayer(
 
 
 namespace {
-	static TSet<XrEnvironmentBlendMode> SupportedBlendModes{ XR_ENVIRONMENT_BLEND_MODE_ADDITIVE, XR_ENVIRONMENT_BLEND_MODE_OPAQUE };
+	static TSet<XrEnvironmentBlendMode> SupportedBlendModes{ XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND, XR_ENVIRONMENT_BLEND_MODE_ADDITIVE, XR_ENVIRONMENT_BLEND_MODE_OPAQUE };
 	static TSet<XrViewConfigurationType> SupportedViewConfigurations{ XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_QUAD_VARJO };
 
 	/** Helper function for acquiring the appropriate FSceneViewport */
@@ -1076,9 +1076,13 @@ void FOpenXRHMD::SetFinalViewRect(const enum EStereoscopicPass StereoPass, const
 	FPipelinedFrameState& PipelineState = GetPipelinedFrameStateForThread();
 	FPipelinedLayerState& LayerState = GetPipelinedLayerStateForThread();
 
+	// Keep the swapchains alive in the LayerState to ensure the XrSwapchain handles remain valid until xrEndFrame.
+	LayerState.ColorSwapchain = Swapchain;
+	LayerState.DepthSwapchain = DepthSwapchain;
+
 	XrSwapchainSubImage& ColorImage = LayerState.ColorImages[ViewIndex];
 	ColorImage.swapchain = Swapchain.IsValid() ? static_cast<FOpenXRSwapchain*>(GetSwapchain())->GetHandle() : XR_NULL_HANDLE;
-	ColorImage.imageArrayIndex = bIsMobileMultiViewEnabled ? ViewIndex : 0;
+	ColorImage.imageArrayIndex = bIsMobileMultiViewEnabled && ViewIndex < 2 ? ViewIndex : 0;
 	ColorImage.imageRect = {
 		{ FinalViewRect.Min.X, FinalViewRect.Min.Y },
 		{ FinalViewRect.Width(), FinalViewRect.Height() }
@@ -1088,8 +1092,14 @@ void FOpenXRHMD::SetFinalViewRect(const enum EStereoscopicPass StereoPass, const
 	if (bDepthExtensionSupported)
 	{
 		DepthImage.swapchain = DepthSwapchain.IsValid() ? static_cast<FOpenXRSwapchain*>(GetDepthSwapchain())->GetHandle() : XR_NULL_HANDLE;
-		DepthImage.imageArrayIndex = bIsMobileMultiViewEnabled ? ViewIndex : 0;
+		DepthImage.imageArrayIndex = bIsMobileMultiViewEnabled && ViewIndex < 2 ? ViewIndex : 0;
 		DepthImage.imageRect = ColorImage.imageRect;
+	}
+
+	if (!PipelineState.PluginViews.IsValidIndex(ViewIndex))
+	{
+		// This plugin is no longer providing this view.
+		return;
 	}
 
 	if (PipelineState.PluginViews[ViewIndex])
@@ -1105,7 +1115,7 @@ void FOpenXRHMD::SetFinalViewRect(const enum EStereoscopicPass StereoPass, const
 	Projection.next = nullptr;
 	Projection.subImage = ColorImage;
 
-	if (bDepthExtensionSupported)
+	if (bDepthExtensionSupported && DepthSwapchain.IsValid())
 	{
 		DepthLayer.type = XR_TYPE_COMPOSITION_LAYER_DEPTH_INFO_KHR;
 		DepthLayer.next = nullptr;
@@ -1191,10 +1201,11 @@ bool FOpenXRHMD::GetRelativeEyePose(int32 InDeviceId, EStereoscopicPass InEye, F
 
 	const FPipelinedFrameState& FrameState = GetPipelinedFrameStateForThread();
 
+	const uint32 ViewIndex = GetViewIndexForPass(InEye);
 	if (FrameState.ViewState.viewStateFlags & XR_VIEW_STATE_ORIENTATION_VALID_BIT &&
-		FrameState.ViewState.viewStateFlags & XR_VIEW_STATE_POSITION_VALID_BIT)
+		FrameState.ViewState.viewStateFlags & XR_VIEW_STATE_POSITION_VALID_BIT &&
+		FrameState.Views.IsValidIndex(ViewIndex))
 	{
-		const uint32 ViewIndex = GetViewIndexForPass(InEye);
 		OutOrientation = ToFQuat(FrameState.Views[ViewIndex].pose.orientation);
 		OutPosition = ToFVector(FrameState.Views[ViewIndex].pose.position, GetWorldToMetersScale());
 		return true;
@@ -1276,6 +1287,11 @@ void FOpenXRHMD::BeginRenderViewFamily(FSceneViewFamily& InViewFamily)
 void FOpenXRHMD::PreRenderView_RenderThread(FRHICommandListImmediate& RHICmdList, FSceneView& InView)
 {
 	check(IsInRenderingThread());
+
+	RHICmdList.EnqueueLambda([this](FRHICommandListImmediate& InRHICmdList)
+	{
+		OnBeginRendering_RHIThread();
+	});
 }
 
 void FOpenXRHMD::PreRenderViewFamily_RenderThread(FRHICommandListImmediate& RHICmdList, FSceneViewFamily& ViewFamily)
@@ -1323,7 +1339,8 @@ FOpenXRHMD::FOpenXRHMD(const FAutoRegister& AutoRegister, XrInstance InInstance,
 	XrInstanceProperties InstanceProps = { XR_TYPE_INSTANCE_PROPERTIES, nullptr };
 	XR_ENSURE(xrGetInstanceProperties(Instance, &InstanceProps));
 
-	bDepthExtensionSupported = IsExtensionEnabled(XR_KHR_COMPOSITION_LAYER_DEPTH_EXTENSION_NAME);
+	bDepthExtensionSupported = IsExtensionEnabled(XR_KHR_COMPOSITION_LAYER_DEPTH_EXTENSION_NAME) &&
+		(!FCStringAnsi::Strstr(InstanceProps.runtimeName, "SteamVR/OpenXR") || FApp::GetGraphicsRHI() != "Vulkan");
 	bHiddenAreaMaskSupported = IsExtensionEnabled(XR_KHR_VISIBILITY_MASK_EXTENSION_NAME) &&
 		!FCStringAnsi::Strstr(InstanceProps.runtimeName, "Oculus");
 	bViewConfigurationFovSupported = IsExtensionEnabled(XR_EPIC_VIEW_CONFIGURATION_FOV_EXTENSION_NAME);
@@ -1337,6 +1354,10 @@ FOpenXRHMD::FOpenXRHMD(const FAutoRegister& AutoRegister, XrInstance InInstance,
 #else
 	bIsMobileMultiViewEnabled = bMobileMultiView && RHISupportsMobileMultiView(GMaxRHIShaderPlatform);
 #endif
+
+	static const auto CVarPropagateAlpha = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.PostProcessing.PropagateAlpha"));
+	bProjectionLayerAlphaEnabled = !IsMobilePlatform(GMaxRHIShaderPlatform) && CVarPropagateAlpha->GetValueOnAnyThread() != 0;
+
 	// Enumerate the viewport configurations
 	uint32 ConfigurationCount;
 	TArray<XrViewConfigurationType> ViewConfigTypes;
@@ -1382,7 +1403,9 @@ FOpenXRHMD::FOpenXRHMD(const FAutoRegister& AutoRegister, XrInstance InInstance,
 		// This is the environment blend mode preferred by the runtime.
 		for (XrEnvironmentBlendMode BlendMode : BlendModes)
 		{
-			if (SupportedBlendModes.Contains(BlendMode))
+			if (SupportedBlendModes.Contains(BlendMode) &&
+				// On mobile platforms the alpha channel can contain depth information, so we can't use alpha blend.
+				(BlendMode != XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND || !IsMobilePlatform(GMaxRHIShaderPlatform)))
 			{
 				SelectedEnvironmentBlendMode = BlendMode;
 				break;
@@ -1623,6 +1646,8 @@ void FOpenXRHMD::BuildOcclusionMeshes()
 		HiddenAreaMeshes.Empty();
 		VisibleAreaMeshes.Empty();
 	}
+
+	bNeedReBuildOcclusionMesh = false;
 }
 
 bool FOpenXRHMD::BuildOcclusionMesh(XrVisibilityMaskTypeKHR Type, int View, FHMDViewMesh& Mesh)
@@ -2204,7 +2229,10 @@ bool FOpenXRHMD::OnStartGameFrame(FWorldContext& WorldContext)
 
 			if (SessionState.state == XR_SESSION_STATE_READY)
 			{
-				GEngine->SetMaxFPS(0);
+				if (!GIsEditor)
+                {
+					GEngine->SetMaxFPS(0);
+                }
 				bIsReady = true;
 				StartSession();
 			}
@@ -2215,14 +2243,25 @@ bool FOpenXRHMD::OnStartGameFrame(FWorldContext& WorldContext)
 			else if (SessionState.state == XR_SESSION_STATE_IDLE)
 			{
 				bIsSynchronized = false;
-				GEngine->SetMaxFPS(OPENXR_PAUSED_IDLE_FPS);
 			}
 			else if (SessionState.state == XR_SESSION_STATE_STOPPING)
 			{
+				if (!GIsEditor)
+                {
+					GEngine->SetMaxFPS(OPENXR_PAUSED_IDLE_FPS);
+                }
 				bIsReady = false;
 				StopSession();
 			}
-			
+			else if (SessionState.state == XR_SESSION_STATE_EXITING)
+			{
+				// We need to make sure we unlock the frame rate again when exiting VR while idle
+				if (!GIsEditor)
+                {
+					GEngine->SetMaxFPS(0);
+                }
+			}
+
 			if (SessionState.state != XR_SESSION_STATE_EXITING && SessionState.state != XR_SESSION_STATE_LOSS_PENDING)
 			{
 				break;
@@ -2310,7 +2349,7 @@ void FOpenXRHMD::OnFinishRendering_RHIThread()
 	XrCompositionLayerProjection Layer = {};
 	Layer.type = XR_TYPE_COMPOSITION_LAYER_PROJECTION;
 	Layer.next = nullptr;
-	Layer.layerFlags = 0;
+	Layer.layerFlags = bProjectionLayerAlphaEnabled ? XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT : 0;
 	Layer.space = PipelineState.TrackingSpace;
 	Layer.viewCount = LayerState.ProjectionLayers.Num();
 	Layer.views = LayerState.ProjectionLayers.GetData();
@@ -2345,7 +2384,7 @@ void FOpenXRHMD::OnFinishRendering_RHIThread()
 			TArray<XrSwapchainSubImage> DepthImages;
 			for (int32 i = 0; i < PipelineState.PluginViews.Num(); i++)
 			{
-				if (PipelineState.PluginViews[i] == Module)
+				if (PipelineState.PluginViews[i] == Module && LayerState.ColorImages.IsValidIndex(i))
 				{
 					ColorImages.Add(LayerState.ColorImages[i]);
 					if (bDepthExtensionSupported)

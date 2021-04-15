@@ -1906,6 +1906,7 @@ namespace UnrealBuildTool
 				WriteMetadataAction.PrerequisiteItems.Add(FileItem.GetItemByFileReference(MetadataTargetFile));
 				WriteMetadataAction.PrerequisiteItems.AddRange(Makefile.OutputItems);
 				WriteMetadataAction.ProducedItems.Add(FileItem.GetItemByFileReference(ReceiptFileName));
+				WriteMetadataAction.ProducedItems.AddRange(MetadataTargetInfo.FileToManifest.Keys.Where(x => !UnrealBuildTool.IsFileInstalled(x)).Select(x => FileItem.GetItemByFileReference(x)));
 
 				Makefile.OutputItems.AddRange(WriteMetadataAction.ProducedItems);
 
@@ -2017,16 +2018,6 @@ namespace UnrealBuildTool
 
 			// Add any toolchain dependencies
 			TargetToolChain.GetExternalDependencies(Makefile.ExternalDependencies);
-
-			// Add any leaf dependencies (eg. response files) to the dependencies list
-			IEnumerable<FileItem> LeafPrerequisiteItems = Makefile.Actions.SelectMany(x => x.PrerequisiteItems).Except(Makefile.Actions.SelectMany(x => x.ProducedItems));
-			foreach (FileItem LeafPrerequisiteItem in LeafPrerequisiteItems)
-			{
-				if (LeafPrerequisiteItem.Exists)
-				{
-					Makefile.InternalDependencies.Add(LeafPrerequisiteItem);
-				}
-			}
 
 			// Write a header containing public definitions for this target
 			if (Rules.ExportPublicHeader != null)

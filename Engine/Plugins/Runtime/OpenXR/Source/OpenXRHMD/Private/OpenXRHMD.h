@@ -60,6 +60,8 @@ public:
 		TArray<XrCompositionLayerDepthInfoKHR> DepthLayers;
 		TArray<XrSwapchainSubImage> ColorImages;
 		TArray<XrSwapchainSubImage> DepthImages;
+		FXRSwapChainPtr ColorSwapchain;
+		FXRSwapChainPtr DepthSwapchain;
 	};
 
 	class FVulkanExtensions : public IHeadMountedDisplayVulkanExtensions
@@ -270,6 +272,7 @@ private:
 	bool					bNeedReBuildOcclusionMesh;
 	bool					bIsMobileMultiViewEnabled;
 	bool					bSupportsHandTracking;
+	bool					bProjectionLayerAlphaEnabled;
 	float					WorldToMetersScale = 100.0f;
 
 	XrSessionState			CurrentSessionState;
