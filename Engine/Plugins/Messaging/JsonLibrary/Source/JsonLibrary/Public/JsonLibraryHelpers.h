@@ -1,4 +1,4 @@
-// Copyright 2020 Tracer Interactive, LLC. All Rights Reserved.
+// Copyright 2021 Tracer Interactive, LLC. All Rights Reserved.
 #pragma once
 #include "CoreMinimal.h"
 #include "Kismet/BlueprintFunctionLibrary.h"
@@ -19,8 +19,8 @@ public:
 #endif
 
 	// Parse a JSON string.
-	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Parse"), Category = "JSON Library")
-	static FJsonLibraryValue Parse( const FString& Text );
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Parse", AdvancedDisplay = "bComments,bTrailingCommas"), Category = "JSON Library")
+	static FJsonLibraryValue Parse( const FString& Text, bool bComments = false, bool bTrailingCommas = false );
 	
 	// Parse a JSON object string.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Parse Object", AutoCreateRefTerm = "Notify", AdvancedDisplay = "Notify"), Category = "JSON Library|Object")
@@ -59,6 +59,20 @@ public:
 	// Convert a string to a JSON value.
 	UFUNCTION(BlueprintPure, meta = (DisplayName = "Convert From String", CompactNodeTitle = "->", BlueprintAutocast), Category = "JSON Library")
 	static FJsonLibraryValue FromString( const FString& Value );
+
+	// Convert a date/time to a JSON value.
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Convert From Date/Time", CompactNodeTitle = "->", BlueprintAutocast), Category = "JSON Library|Engine")
+	static FJsonLibraryValue FromDateTime( const FDateTime& Value );
+	// Convert a GUID to a JSON value.
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Convert From GUID", CompactNodeTitle = "->", BlueprintAutocast), Category = "JSON Library|Engine")
+	static FJsonLibraryValue FromGuid( const FGuid& Value );
+
+	// Convert a color to a JSON value.
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Convert From Color", CompactNodeTitle = "->", BlueprintAutocast), Category = "JSON Library|Engine")
+	static FJsonLibraryValue FromColor( const FColor& Value );
+	// Convert a linear color to a JSON value.
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Convert From Linear Color", CompactNodeTitle = "->", BlueprintAutocast), Category = "JSON Library|Engine")
+	static FJsonLibraryValue FromLinearColor( const FLinearColor& Value );
 	
 	// Convert a rotator to a JSON value.
 	UFUNCTION(BlueprintPure, meta = (DisplayName = "Convert From Rotator", CompactNodeTitle = "->", BlueprintAutocast), Category = "JSON Library|Engine")
@@ -97,6 +111,20 @@ public:
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy From String Array"), Category = "JSON Library|Array")
 	static FJsonLibraryValue FromStringArray( const TArray<FString>& Value );
 
+	// Copy an array of date/times to a JSON value.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy From Date/Time Array"), Category = "JSON Library|Array|Engine")
+	static FJsonLibraryValue FromDateTimeArray( const TArray<FDateTime>& Value );
+	// Copy an array of GUIDs to a JSON value.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy From GUID Array"), Category = "JSON Library|Array|Engine")
+	static FJsonLibraryValue FromGuidArray( const TArray<FGuid>& Value );
+
+	// Copy an array of colors to a JSON value.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy From Color Array"), Category = "JSON Library|Array|Engine")
+	static FJsonLibraryValue FromColorArray( const TArray<FColor>& Value );
+	// Copy an array of linear colors to a JSON value.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy From Linear Color Array"), Category = "JSON Library|Array|Engine")
+	static FJsonLibraryValue FromLinearColorArray( const TArray<FLinearColor>& Value );
+
 	// Copy an array of rotators to a JSON value.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy From Rotator Array"), Category = "JSON Library|Array|Engine")
 	static FJsonLibraryValue FromRotatorArray( const TArray<FRotator>& Value );
@@ -124,6 +152,20 @@ public:
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy From String Map"), Category = "JSON Library|Map")
 	static FJsonLibraryValue FromStringMap( const TMap<FString, FString>& Value );
 
+	// Copy a map of date/times to a JSON value.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy From Date/Time Map"), Category = "JSON Library|Map|Engine")
+	static FJsonLibraryValue FromDateTimeMap( const TMap<FString, FDateTime>& Value );
+	// Copy a map of GUIDs to a JSON value.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy From GUID Map"), Category = "JSON Library|Map|Engine")
+	static FJsonLibraryValue FromGuidMap( const TMap<FString, FGuid>& Value );
+
+	// Copy a map of colors to a JSON value.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy From Color Map"), Category = "JSON Library|Map|Engine")
+	static FJsonLibraryValue FromColorMap( const TMap<FString, FColor>& Value );
+	// Copy a map of linear colors to a JSON value.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy From Linear Color Map"), Category = "JSON Library|Map|Engine")
+	static FJsonLibraryValue FromLinearColorMap( const TMap<FString, FLinearColor>& Value );
+
 	// Copy a map of rotators to a JSON value.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy From Rotator Map"), Category = "JSON Library|Map|Engine")
 	static FJsonLibraryValue FromRotatorMap( const TMap<FString, FRotator>& Value );
@@ -146,6 +188,20 @@ public:
 	// Convert a JSON value to a string.
 	UFUNCTION(BlueprintPure, meta = (DisplayName = "Convert To String", CompactNodeTitle = "->", BlueprintAutocast), Category = "JSON Library")
 	static FString ToString( UPARAM(ref) const FJsonLibraryValue& Value );
+
+	// Convert a JSON value to a date/time.
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Convert To Date/Time", CompactNodeTitle = "->", BlueprintAutocast), Category = "JSON Library|Engine")
+	static FDateTime ToDateTime( UPARAM(ref) const FJsonLibraryValue& Value );
+	// Convert a JSON value to a GUID.
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Convert To GUID", CompactNodeTitle = "->", BlueprintAutocast), Category = "JSON Library|Engine")
+	static FGuid ToGuid( UPARAM(ref) const FJsonLibraryValue& Value );
+
+	// Convert a JSON value to a color.
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Convert To Color", CompactNodeTitle = "->", BlueprintAutocast), Category = "JSON Library|Engine")
+	static FColor ToColor( UPARAM(ref) const FJsonLibraryValue& Value );
+	// Convert a JSON value to a linear color.
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Convert To Linear Color", CompactNodeTitle = "->", BlueprintAutocast), Category = "JSON Library|Engine")
+	static FLinearColor ToLinearColor( UPARAM(ref) const FJsonLibraryValue& Value );
 
 	// Convert a JSON value to a rotator.
 	UFUNCTION(BlueprintPure, meta = (DisplayName = "Convert To Rotator", CompactNodeTitle = "->", BlueprintAutocast), Category = "JSON Library|Engine")
@@ -184,6 +240,20 @@ public:
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy To String Array"), Category = "JSON Library|Array")
 	static TArray<FString> ToStringArray( UPARAM(ref) const FJsonLibraryValue& Target );
 
+	// Copy this value to an array of date/times.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy To Date/Time Array"), Category = "JSON Library|Array|Engine")
+	static TArray<FDateTime> ToDateTimeArray( UPARAM(ref) const FJsonLibraryValue& Target );
+	// Copy this value to an array of GUIDs.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy To GUID Array"), Category = "JSON Library|Array|Engine")
+	static TArray<FGuid> ToGuidArray( UPARAM(ref) const FJsonLibraryValue& Target );
+
+	// Copy this value to an array of colors.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy To Color Array"), Category = "JSON Library|Array|Engine")
+	static TArray<FColor> ToColorArray( UPARAM(ref) const FJsonLibraryValue& Target );
+	// Copy this value to an array of linear colors.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy To Linear Color Array"), Category = "JSON Library|Array|Engine")
+	static TArray<FLinearColor> ToLinearColorArray( UPARAM(ref) const FJsonLibraryValue& Target );
+
 	// Copy this value to an array of rotators.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy To Rotator Array"), Category = "JSON Library|Array|Engine")
 	static TArray<FRotator> ToRotatorArray( UPARAM(ref) const FJsonLibraryValue& Target );
@@ -211,6 +281,20 @@ public:
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy To String Map"), Category = "JSON Library|Map")
 	static TMap<FString, FString> ToStringMap( UPARAM(ref) const FJsonLibraryValue& Target );
 
+	// Copy this value to a map of date/times.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy To Date/Time Map"), Category = "JSON Library|Map|Engine")
+	static TMap<FString, FDateTime> ToDateTimeMap( UPARAM(ref) const FJsonLibraryValue& Target );
+	// Copy this value to a map of GUIDs.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy To GUID Map"), Category = "JSON Library|Map|Engine")
+	static TMap<FString, FGuid> ToGuidMap( UPARAM(ref) const FJsonLibraryValue& Target );
+
+	// Copy this value to a map of colors.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy To Color Map"), Category = "JSON Library|Map|Engine")
+	static TMap<FString, FColor> ToColorMap( UPARAM(ref) const FJsonLibraryValue& Target );
+	// Copy this value to a map of linear colors.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy To Linear Color Map"), Category = "JSON Library|Map|Engine")
+	static TMap<FString, FLinearColor> ToLinearColorMap( UPARAM(ref) const FJsonLibraryValue& Target );
+
 	// Copy this value to a map of rotators.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy To Rotator Map"), Category = "JSON Library|Map|Engine")
 	static TMap<FString, FRotator> ToRotatorMap( UPARAM(ref) const FJsonLibraryValue& Target );
@@ -221,6 +305,10 @@ public:
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy To Vector Map"), Category = "JSON Library|Map|Engine")
 	static TMap<FString, FVector> ToVectorMap( UPARAM(ref) const FJsonLibraryValue& Target );
 
+	// Convert a linear color to a JSON object.
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Convert Linear Color To Object", CompactNodeTitle = "->", BlueprintAutocast), Category = "JSON Library|Engine")
+	static FJsonLibraryObject ConvertLinearColorToObject( const FLinearColor& Value );
+
 	// Convert a rotator to a JSON object.
 	UFUNCTION(BlueprintPure, meta = (DisplayName = "Convert Rotator To Object", CompactNodeTitle = "->", BlueprintAutocast), Category = "JSON Library|Engine")
 	static FJsonLibraryObject ConvertRotatorToObject( const FRotator& Value );
@@ -230,6 +318,10 @@ public:
 	// Convert a vector to a JSON object.
 	UFUNCTION(BlueprintPure, meta = (DisplayName = "Convert Vector To Object", CompactNodeTitle = "->", BlueprintAutocast), Category = "JSON Library|Engine")
 	static FJsonLibraryObject ConvertVectorToObject( const FVector& Value );
+
+	// Convert a JSON object to a linear color.
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Convert Object To Linear Color", CompactNodeTitle = "->", BlueprintAutocast), Category = "JSON Library|Engine")
+	static FLinearColor ConvertObjectToLinearColor( UPARAM(ref) const FJsonLibraryObject& Object );
 
 	// Convert a JSON object to a rotator.
 	UFUNCTION(BlueprintPure, meta = (DisplayName = "Convert Object To Rotator", CompactNodeTitle = "->", BlueprintAutocast), Category = "JSON Library|Engine")
@@ -261,6 +353,20 @@ public:
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy String Map To Object"), Category = "JSON Library|Map")
 	static FJsonLibraryObject ConvertStringMapToObject( const TMap<FString, FString>& Value );
 
+	// Copy a map of date/times to a JSON object.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy Date/Time Map To Object"), Category = "JSON Library|Map|Engine")
+	static FJsonLibraryObject ConvertDateTimeMapToObject( const TMap<FString, FDateTime>& Value );
+	// Copy a map of GUIDs to a JSON object.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy GUID Map To Object"), Category = "JSON Library|Map|Engine")
+	static FJsonLibraryObject ConvertGuidMapToObject( const TMap<FString, FGuid>& Value );
+
+	// Copy a map of colors to a JSON object.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy Color Map To Object"), Category = "JSON Library|Map|Engine")
+	static FJsonLibraryObject ConvertColorMapToObject( const TMap<FString, FColor>& Value );
+	// Copy a map of linear colors to a JSON object.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy Linear Color Map To Object"), Category = "JSON Library|Map|Engine")
+	static FJsonLibraryObject ConvertLinearColorMapToObject( const TMap<FString, FLinearColor>& Value );
+
 	// Copy a map of rotators to a JSON object.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy Rotator Map To Object"), Category = "JSON Library|Map|Engine")
 	static FJsonLibraryObject ConvertRotatorMapToObject( const TMap<FString, FRotator>& Value );
@@ -291,6 +397,20 @@ public:
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy String Array To List"), Category = "JSON Library|Array")
 	static FJsonLibraryList ConvertStringArrayToList( const TArray<FString>& Value );
 
+	// Copy an array of date/times to a JSON array.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy Date/Time Array To List"), Category = "JSON Library|Array|Engine")
+	static FJsonLibraryList ConvertDateTimeArrayToList( const TArray<FDateTime>& Value );
+	// Copy an array of GUIDs to a JSON array.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy GUID Array To List"), Category = "JSON Library|Array|Engine")
+	static FJsonLibraryList ConvertGuidArrayToList( const TArray<FGuid>& Value );
+
+	// Copy an array of colors to a JSON array.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy Color Array To List"), Category = "JSON Library|Array|Engine")
+	static FJsonLibraryList ConvertColorArrayToList( const TArray<FColor>& Value );
+	// Copy an array of linear colors to a JSON array.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy Linear Color Array To List"), Category = "JSON Library|Array|Engine")
+	static FJsonLibraryList ConvertLinearColorArrayToList( const TArray<FLinearColor>& Value );
+
 	// Copy an array of rotators to a JSON array.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy Rotator Array To List"), Category = "JSON Library|Array|Engine")
 	static FJsonLibraryList ConvertRotatorArrayToList( const TArray<FRotator>& Value );
@@ -316,6 +436,10 @@ public:
 	UFUNCTION(BlueprintPure, meta = (DisplayName = "Valid"), Category = "JSON Library|Value")
 	static bool JsonValue_IsValid( UPARAM(ref) const FJsonLibraryValue& Target );
 
+	// Check if this value is a GUID.
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "GUID"), Category = "JSON Library|Value|Engine")
+	static bool JsonValue_IsGuid( UPARAM(ref) const FJsonLibraryValue& Target );
+
 	// Check if this value is a rotator.
 	UFUNCTION(BlueprintPure, meta = (DisplayName = "Rotator"), Category = "JSON Library|Value|Engine")
 	static bool JsonValue_IsRotator( UPARAM(ref) const FJsonLibraryValue& Target );
@@ -327,8 +451,8 @@ public:
 	static bool JsonValue_IsVector( UPARAM(ref) const FJsonLibraryValue& Target );
 
 	// Stringify this value.
-	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Stringify"), Category = "JSON Library|Value")
-	static FString JsonValue_Stringify( UPARAM(ref) const FJsonLibraryValue& Target );
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Stringify", AdvancedDisplay = "bCondensed"), Category = "JSON Library|Value")
+	static FString JsonValue_Stringify( UPARAM(ref) const FJsonLibraryValue& Target, bool bCondensed = true );
 
 
 	// Check if this object equals another object.
@@ -366,6 +490,20 @@ public:
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Add String Map"), Category = "JSON Library|Map")
 	static FJsonLibraryObject& JsonObject_AddStringMap( UPARAM(ref) FJsonLibraryObject& Target, const TMap<FString, FString>& Map );
 
+	// Add a map of date/times to this object.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Add Date/Time Map"), Category = "JSON Library|Map|Engine")
+	static FJsonLibraryObject& JsonObject_AddDateTimeMap( UPARAM(ref) FJsonLibraryObject& Target, const TMap<FString, FDateTime>& Map );
+	// Add a map of GUIDs to this object.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Add GUID Map"), Category = "JSON Library|Map|Engine")
+	static FJsonLibraryObject& JsonObject_AddGuidMap( UPARAM(ref) FJsonLibraryObject& Target, const TMap<FString, FGuid>& Map );
+
+	// Add a map of colors to this object.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Add Color Map"), Category = "JSON Library|Map|Engine")
+	static FJsonLibraryObject& JsonObject_AddColorMap( UPARAM(ref) FJsonLibraryObject& Target, const TMap<FString, FColor>& Map );
+	// Add a map of linear colors to this object.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Add Linear Color Map"), Category = "JSON Library|Map|Engine")
+	static FJsonLibraryObject& JsonObject_AddLinearColorMap( UPARAM(ref) FJsonLibraryObject& Target, const TMap<FString, FLinearColor>& Map );
+
 	// Add a map of rotators to this object.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Add Rotator Map"), Category = "JSON Library|Map|Engine")
 	static FJsonLibraryObject& JsonObject_AddRotatorMap( UPARAM(ref) FJsonLibraryObject& Target, const TMap<FString, FRotator>& Map );
@@ -395,6 +533,20 @@ public:
 	// Get a property as a string.
 	UFUNCTION(BlueprintPure, meta = (DisplayName = "Get String"), Category = "JSON Library|Object")
 	static FString JsonObject_GetString( UPARAM(ref) const FJsonLibraryObject& Target, const FString& Key );
+
+	// Get a property as a date/time.
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Get Date/Time"), Category = "JSON Library|Object|Engine")
+	static FDateTime JsonObject_GetDateTime( UPARAM(ref) const FJsonLibraryObject& Target, const FString& Key );
+	// Get a property as a GUID.
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Get GUID"), Category = "JSON Library|Object|Engine")
+	static FGuid JsonObject_GetGuid( UPARAM(ref) const FJsonLibraryObject& Target, const FString& Key );
+
+	// Get a property as a color.
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Get Color"), Category = "JSON Library|Object|Engine")
+	static FColor JsonObject_GetColor( UPARAM(ref) const FJsonLibraryObject& Target, const FString& Key );
+	// Get a property as a linear color.
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Get Linear Color"), Category = "JSON Library|Object|Engine")
+	static FLinearColor JsonObject_GetLinearColor( UPARAM(ref) const FJsonLibraryObject& Target, const FString& Key );
 
 	// Get a property as a rotator.
 	UFUNCTION(BlueprintPure, meta = (DisplayName = "Get Rotator"), Category = "JSON Library|Object|Engine")
@@ -435,6 +587,20 @@ public:
 	// Set a property as a string.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Set String"), Category = "JSON Library|Object")
 	static FJsonLibraryObject& JsonObject_SetString( UPARAM(ref) FJsonLibraryObject& Target, const FString& Key, const FString& Value );
+
+	// Set a property as a date/time.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Set Date/Time"), Category = "JSON Library|Object|Engine")
+	static FJsonLibraryObject& JsonObject_SetDateTime( UPARAM(ref) FJsonLibraryObject& Target, const FString& Key, const FDateTime& Value );
+	// Set a property as a GUID.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Set GUID"), Category = "JSON Library|Object|Engine")
+	static FJsonLibraryObject& JsonObject_SetGuid( UPARAM(ref) FJsonLibraryObject& Target, const FString& Key, const FGuid& Value );
+
+	// Set a property as a color.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Set Color"), Category = "JSON Library|Object|Engine")
+	static FJsonLibraryObject& JsonObject_SetColor( UPARAM(ref) FJsonLibraryObject& Target, const FString& Key, const FColor& Value );
+	// Set a property as a linear color.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Set Linear Color"), Category = "JSON Library|Object|Engine")
+	static FJsonLibraryObject& JsonObject_SetLinearColor( UPARAM(ref) FJsonLibraryObject& Target, const FString& Key, const FLinearColor& Value );
 
 	// Set a property as a rotator.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Set Rotator"), Category = "JSON Library|Object|Engine")
@@ -481,8 +647,8 @@ public:
 	static bool JsonObject_IsVector( UPARAM(ref) const FJsonLibraryObject& Target );
 
 	// Stringify this object.
-	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Stringify"), Category = "JSON Library|Object")
-	static FString JsonObject_Stringify( UPARAM(ref) const FJsonLibraryObject& Target );
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Stringify", AdvancedDisplay = "bCondensed"), Category = "JSON Library|Object")
+	static FString JsonObject_Stringify( UPARAM(ref) const FJsonLibraryObject& Target, bool bCondensed = true );
 
 
 	// Check if this list equals another list.
@@ -516,6 +682,20 @@ public:
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Append String Array"), Category = "JSON Library|Array")
 	static FJsonLibraryList& JsonList_AppendStringArray( UPARAM(ref) FJsonLibraryList& Target, const TArray<FString>& Array );
 
+	// Append an array of date/times to this list.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Append Date/Time Array"), Category = "JSON Library|Array|Engine")
+	static FJsonLibraryList& JsonList_AppendDateTimeArray( UPARAM(ref) FJsonLibraryList& Target, const TArray<FDateTime>& Array );
+	// Append an array of GUIDs to this list.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Append GUID Array"), Category = "JSON Library|Array|Engine")
+	static FJsonLibraryList& JsonList_AppendGuidArray( UPARAM(ref) FJsonLibraryList& Target, const TArray<FGuid>& Array );
+
+	// Append an array of colors to this list.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Append Color Array"), Category = "JSON Library|Array|Engine")
+	static FJsonLibraryList& JsonList_AppendColorArray( UPARAM(ref) FJsonLibraryList& Target, const TArray<FColor>& Array );
+	// Append an array of linear colors to this list.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Append Linear Color Array"), Category = "JSON Library|Array|Engine")
+	static FJsonLibraryList& JsonList_AppendLinearColorArray( UPARAM(ref) FJsonLibraryList& Target, const TArray<FLinearColor>& Array );
+
 	// Append an array of rotators to this list.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Append Rotator Array"), Category = "JSON Library|Array|Engine")
 	static FJsonLibraryList& JsonList_AppendRotatorArray( UPARAM(ref) FJsonLibraryList& Target, const TArray<FRotator>& Array );
@@ -547,6 +727,20 @@ public:
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Inject String Array"), Category = "JSON Library|Array")
 	static FJsonLibraryList& JsonList_InjectStringArray( UPARAM(ref) FJsonLibraryList& Target, int32 Index, const TArray<FString>& Array );
 
+	// Inject the items of a date/time array into this list.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Inject Date/Time Array"), Category = "JSON Library|Array|Engine")
+	static FJsonLibraryList& JsonList_InjectDateTimeArray( UPARAM(ref) FJsonLibraryList& Target, int32 Index, const TArray<FDateTime>& Array );
+	// Inject the items of a GUID array into this list.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Inject GUID Array"), Category = "JSON Library|Array|Engine")
+	static FJsonLibraryList& JsonList_InjectGuidArray( UPARAM(ref) FJsonLibraryList& Target, int32 Index, const TArray<FGuid>& Array );
+
+	// Inject the items of a color array into this list.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Inject Color Array"), Category = "JSON Library|Array|Engine")
+	static FJsonLibraryList& JsonList_InjectColorArray( UPARAM(ref) FJsonLibraryList& Target, int32 Index, const TArray<FColor>& Array );
+	// Inject the items of a linear color array into this list.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Inject Linear Color Array"), Category = "JSON Library|Array|Engine")
+	static FJsonLibraryList& JsonList_InjectLinearColorArray( UPARAM(ref) FJsonLibraryList& Target, int32 Index, const TArray<FLinearColor>& Array );
+
 	// Inject the items of a rotator array into this list.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Inject Rotator Array"), Category = "JSON Library|Array|Engine")
 	static FJsonLibraryList& JsonList_InjectRotatorArray( UPARAM(ref) FJsonLibraryList& Target, int32 Index, const TArray<FRotator>& Array );
@@ -573,6 +767,20 @@ public:
 	// Add a string to this list.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Add String"), Category = "JSON Library|List")
 	static FJsonLibraryList& JsonList_AddString( UPARAM(ref) FJsonLibraryList& Target, const FString& Value );
+
+	// Add a date/time to this list.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Add Date/Time"), Category = "JSON Library|List|Engine")
+	static FJsonLibraryList& JsonList_AddDateTime( UPARAM(ref) FJsonLibraryList& Target, const FDateTime& Value );
+	// Add a GUID to this list.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Add GUID"), Category = "JSON Library|List|Engine")
+	static FJsonLibraryList& JsonList_AddGuid( UPARAM(ref) FJsonLibraryList& Target, const FGuid& Value );
+
+	// Add a color to this list.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Add Color"), Category = "JSON Library|List|Engine")
+	static FJsonLibraryList& JsonList_AddColor( UPARAM(ref) FJsonLibraryList& Target, const FColor& Value );
+	// Add a linear color to this list.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Add Linear Color"), Category = "JSON Library|List|Engine")
+	static FJsonLibraryList& JsonList_AddLinearColor( UPARAM(ref) FJsonLibraryList& Target, const FLinearColor& Value );
 	
 	// Add a rotator to this list.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Add Rotator"), Category = "JSON Library|List|Engine")
@@ -614,6 +822,20 @@ public:
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Insert String"), Category = "JSON Library|List")
 	static FJsonLibraryList& JsonList_InsertString( UPARAM(ref) FJsonLibraryList& Target, int32 Index, const FString& Value );
 
+	// Insert a date/time into this list.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Insert Date/Time"), Category = "JSON Library|List|Engine")
+	static FJsonLibraryList& JsonList_InsertDateTime( UPARAM(ref) FJsonLibraryList& Target, int32 Index, const FDateTime& Value );
+	// Insert a GUID into this list.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Insert GUID"), Category = "JSON Library|List|Engine")
+	static FJsonLibraryList& JsonList_InsertGuid( UPARAM(ref) FJsonLibraryList& Target, int32 Index, const FGuid& Value );
+
+	// Insert a color into this list.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Insert Color"), Category = "JSON Library|List|Engine")
+	static FJsonLibraryList& JsonList_InsertColor( UPARAM(ref) FJsonLibraryList& Target, int32 Index, const FColor& Value );
+	// Insert a linear color into this list.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Insert Linear Color"), Category = "JSON Library|List|Engine")
+	static FJsonLibraryList& JsonList_InsertLinearColor( UPARAM(ref) FJsonLibraryList& Target, int32 Index, const FLinearColor& Value );
+
 	// Insert a rotator into this list.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Insert Rotator"), Category = "JSON Library|List|Engine")
 	static FJsonLibraryList& JsonList_InsertRotator( UPARAM(ref) FJsonLibraryList& Target, int32 Index, const FRotator& Value );
@@ -654,6 +876,20 @@ public:
 	UFUNCTION(BlueprintPure, meta = (DisplayName = "Get String"), Category = "JSON Library|List")
 	static FString JsonList_GetString( UPARAM(ref) const FJsonLibraryList& Target, int32 Index );
 
+	// Get an item as a date/time.
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Get Date/Time"), Category = "JSON Library|List|Engine")
+	static FDateTime JsonList_GetDateTime( UPARAM(ref) const FJsonLibraryList& Target, int32 Index );
+	// Get an item as a GUID.
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Get GUID"), Category = "JSON Library|List|Engine")
+	static FGuid JsonList_GetGuid( UPARAM(ref) const FJsonLibraryList& Target, int32 Index );
+
+	// Get an item as a color.
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Get Color"), Category = "JSON Library|List|Engine")
+	static FColor JsonList_GetColor( UPARAM(ref) const FJsonLibraryList& Target, int32 Index );
+	// Get an item as a linear color.
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Get Linear Color"), Category = "JSON Library|List|Engine")
+	static FLinearColor JsonList_GetLinearColor( UPARAM(ref) const FJsonLibraryList& Target, int32 Index );
+
 	// Get an item as a rotator.
 	UFUNCTION(BlueprintPure, meta = (DisplayName = "Get Rotator"), Category = "JSON Library|List|Engine")
 	static FRotator JsonList_GetRotator( UPARAM(ref) const FJsonLibraryList& Target, int32 Index );
@@ -693,6 +929,20 @@ public:
 	// Set an item as a string.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Set String"), Category = "JSON Library|List")
 	static FJsonLibraryList& JsonList_SetString( UPARAM(ref) FJsonLibraryList& Target, int32 Index, const FString& Value );
+
+	// Set an item as a date/time.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Set Date/Time"), Category = "JSON Library|List|Engine")
+	static FJsonLibraryList& JsonList_SetDateTime( UPARAM(ref) FJsonLibraryList& Target, int32 Index, const FDateTime& Value );
+	// Set an item as a GUID.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Set GUID"), Category = "JSON Library|List|Engine")
+	static FJsonLibraryList& JsonList_SetGuid( UPARAM(ref) FJsonLibraryList& Target, int32 Index, const FGuid& Value );
+
+	// Set an item as a color.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Set Color"), Category = "JSON Library|List|Engine")
+	static FJsonLibraryList& JsonList_SetColor( UPARAM(ref) FJsonLibraryList& Target, int32 Index, const FColor& Value );
+	// Set an item as a linear color.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Set Linear Color"), Category = "JSON Library|List|Engine")
+	static FJsonLibraryList& JsonList_SetLinearColor( UPARAM(ref) FJsonLibraryList& Target, int32 Index, const FLinearColor& Value );
 
 	// Set an item as a rotator.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Set Rotator"), Category = "JSON Library|List|Engine")
@@ -738,6 +988,20 @@ public:
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Remove String"), Category = "JSON Library|List")
 	static FJsonLibraryList& JsonList_RemoveString( UPARAM(ref) FJsonLibraryList& Target, const FString& Value );
 
+	// Remove a date/time from this list.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Remove Date/Time"), Category = "JSON Library|List|Engine")
+	static FJsonLibraryList& JsonList_RemoveDateTime( UPARAM(ref) FJsonLibraryList& Target, const FDateTime& Value );
+	// Remove a GUID from this list.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Remove GUID"), Category = "JSON Library|List|Engine")
+	static FJsonLibraryList& JsonList_RemoveGuid( UPARAM(ref) FJsonLibraryList& Target, const FGuid& Value );
+
+	// Remove a color from this list.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Remove Color"), Category = "JSON Library|List|Engine")
+	static FJsonLibraryList& JsonList_RemoveColor( UPARAM(ref) FJsonLibraryList& Target, const FColor& Value );
+	// Remove a linear color from this list.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Remove Linear Color"), Category = "JSON Library|List|Engine")
+	static FJsonLibraryList& JsonList_RemoveLinearColor( UPARAM(ref) FJsonLibraryList& Target, const FLinearColor& Value );
+
 	// Remove a rotator from this list.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Remove Rotator"), Category = "JSON Library|List|Engine")
 	static FJsonLibraryList& JsonList_RemoveRotator( UPARAM(ref) FJsonLibraryList& Target, const FRotator& Value );
@@ -771,6 +1035,20 @@ public:
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Find String"), Category = "JSON Library|List")
 	static int32 JsonList_FindString( UPARAM(ref) const FJsonLibraryList& Target, const FString& Value, int32 Index = 0 );
 
+	// Find a date/time in this list.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Find Date/Time"), Category = "JSON Library|List|Engine")
+	static int32 JsonList_FindDateTime( UPARAM(ref) const FJsonLibraryList& Target, const FDateTime& Value, int32 Index = 0 );
+	// Find a GUID in this list.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Find GUID"), Category = "JSON Library|List|Engine")
+	static int32 JsonList_FindGuid( UPARAM(ref) const FJsonLibraryList& Target, const FGuid& Value, int32 Index = 0 );
+
+	// Find a color in this list.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Find Color"), Category = "JSON Library|List|Engine")
+	static int32 JsonList_FindColor( UPARAM(ref) const FJsonLibraryList& Target, const FColor& Value, int32 Index = 0 );
+	// Find a linear color in this list.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Find Linear Color"), Category = "JSON Library|List|Engine")
+	static int32 JsonList_FindLinearColor( UPARAM(ref) const FJsonLibraryList& Target, const FLinearColor& Value, int32 Index = 0 );
+
 	// Find a rotator in this list.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Find Rotator"), Category = "JSON Library|List|Engine")
 	static int32 JsonList_FindRotator( UPARAM(ref) const FJsonLibraryList& Target, const FRotator& Value, int32 Index = 0 );
@@ -799,6 +1077,11 @@ public:
 	static bool JsonList_IsEmpty( UPARAM(ref) const FJsonLibraryList& Target );
 	
 	// Stringify this list.
-	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Stringify"), Category = "JSON Library|List")
-	static FString JsonList_Stringify( UPARAM(ref) const FJsonLibraryList& Target );
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Stringify", AdvancedDisplay = "bCondensed"), Category = "JSON Library|List")
+	static FString JsonList_Stringify( UPARAM(ref) const FJsonLibraryList& Target, bool bCondensed = true );
+
+public:
+
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Strip Comments/Commas (JSON)", AdvancedDisplay = "bComments,bTrailingCommas"), Category = "JSON Library|Helpers")
+	static FString StripCommentsOrCommas( const FString& Text, bool bComments = true, bool bTrailingCommas = true );
 };

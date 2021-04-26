@@ -1,4 +1,4 @@
-// Copyright 2020 Tracer Interactive, LLC. All Rights Reserved.
+// Copyright 2021 Tracer Interactive, LLC. All Rights Reserved.
 #pragma once
 #include "Dom/JsonValue.h"
 #include "Dom/JsonObject.h"
@@ -40,6 +40,12 @@ public:
 	FJsonLibraryValue( uint64 Value );
 	FJsonLibraryValue( const FString& Value );
 
+	FJsonLibraryValue( const FDateTime& Value );
+	FJsonLibraryValue( const FGuid& Value );
+
+	FJsonLibraryValue( const FColor& Value );
+	FJsonLibraryValue( const FLinearColor& Value );
+
 	FJsonLibraryValue( const FRotator& Value );
 	FJsonLibraryValue( const FTransform& Value );
 	FJsonLibraryValue( const FVector& Value );
@@ -66,6 +72,16 @@ public:
 	double GetNumber() const;
 	// Convert this value to a string.
 	FString GetString() const;
+
+	// Convert this value to a date/time.
+	FDateTime GetDateTime() const;
+	// Convert this value to a GUID.
+	FGuid GetGuid() const;
+
+	// Convert this value to a color.
+	FColor GetColor() const;
+	// Convert this value to a linear color.
+	FLinearColor GetLinearColor() const;
 
 	// Convert this value to a rotator.
 	FRotator GetRotator() const;
@@ -100,13 +116,23 @@ protected:
 	
 	TSharedPtr<FJsonValue> JsonValue;
 
-	bool TryParse( const FString& Text );
+	bool TryParse( const FString& Text, bool bStripComments = false, bool bStripTrailingCommas = false );
 	bool TryStringify( FString& Text, bool bCondensed = true ) const;
 
 public:
 
 	// Check if this value is valid.
 	bool IsValid() const;
+	
+	// Check if this value is a date/time.
+	bool IsDateTime() const;
+	// Check if this value is a GUID.
+	bool IsGuid() const;
+
+	// Check if this value is a color.
+	bool IsColor() const;
+	// Check if this value is a linear color.
+	bool IsLinearColor() const;
 
 	// Check if this value is a rotator.
 	bool IsRotator() const;
@@ -117,9 +143,11 @@ public:
 
 	// Parse a JSON string.
 	static FJsonLibraryValue Parse( const FString& Text );
+	// Parse a relaxed JSON string.
+	static FJsonLibraryValue ParseRelaxed( const FString& Text, bool bStripComments = true, bool bStripTrailingCommas = true );
 
 	// Stringify this value as a JSON string.
-	FString Stringify() const;
+	FString Stringify( bool bCondensed = true ) const;
 
 	// Copy this value to an array of JSON values.
 	TArray<FJsonLibraryValue> ToArray() const;
