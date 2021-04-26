@@ -151,6 +151,9 @@ protected:
 	UPROPERTY(EditAnywhere, meta = (DisplayName = "Transparency Threshold", UIMin = 0, UIMax = 1), Category = "Behavior|Virtual Pointer")
 	float VirtualPointerTransparencyThreshold;
 	
+	UPROPERTY(EditAnywhere, meta = (DisplayName = "Custom Cursors"), Category = "Behavior|Mouse")
+	bool bCustomCursors;
+	
 #if !UE_SERVER
 	TSharedPtr<class SWebInterface> WebInterfaceWidget;
 #endif

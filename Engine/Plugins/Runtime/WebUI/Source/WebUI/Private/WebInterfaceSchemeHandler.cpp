@@ -15,7 +15,7 @@ FWebInterfaceSchemeHandler::FWebInterfaceSchemeHandler()
 
 FWebInterfaceSchemeHandler::~FWebInterfaceSchemeHandler()
 {
-	IWebBrowserSchemeHandler::~IWebBrowserSchemeHandler();
+	IWebInterfaceBrowserSchemeHandler::~IWebInterfaceBrowserSchemeHandler();
 	CloseReader();
 }
 
@@ -118,7 +118,7 @@ void FWebInterfaceSchemeHandler::CloseReader()
 }
 
 
-TUniquePtr<IWebBrowserSchemeHandler> FWebInterfaceSchemeHandlerFactory::Create( FString Verb, FString Url )
+TUniquePtr<IWebInterfaceBrowserSchemeHandler> FWebInterfaceSchemeHandlerFactory::Create( FString Verb, FString Url )
 {
 	return MakeUnique<FWebInterfaceSchemeHandler>();
 }

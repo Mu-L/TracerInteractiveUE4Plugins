@@ -50,6 +50,8 @@ UWebInterface::UWebInterface( const FObjectInitializer& ObjectInitializer )
 	bEnableVirtualPointerTransparency   = false;
 	VirtualPointerTransparencyThreshold = 0.333f;
 
+	bCustomCursors = false;
+
 #if WITH_EDITOR || PLATFORM_ANDROID
 	struct FConstructorStatics
 	{
@@ -464,6 +466,7 @@ TSharedRef<SWidget> UWebInterface::RebuildWidget()
 	WebInterfaceWidget = SNew( SWebInterface )
 		.FrameRate( FrameRate )
 		.InitialURL( InitialURL )
+		.NativeCursors( !bCustomCursors )
 		.EnableMouseTransparency( bEnableMouseTransparency )
 		.EnableVirtualPointerTransparency( bEnableVirtualPointerTransparency )
 		.TransparencyDelay( MouseTransparencyDelay )
