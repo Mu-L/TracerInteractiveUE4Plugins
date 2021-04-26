@@ -5,6 +5,7 @@
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonTypes.h"
+#include "UObject/StructOnScope.h"
 #include "JsonLibraryEnums.h"
 #include "JsonLibraryValue.h"
 #include "JsonLibraryObject.generated.h"
@@ -19,6 +20,8 @@ struct JSONLIBRARY_API FJsonLibraryObject
 	friend struct FJsonLibraryList;
 	friend struct FJsonLibraryValue;
 
+	friend class UJsonLibraryBlueprintHelpers;
+
 	GENERATED_USTRUCT_BODY()
 
 protected:
@@ -26,7 +29,17 @@ protected:
 	FJsonLibraryObject( const TSharedPtr<FJsonValue>& Value );
 	FJsonLibraryObject( const TSharedPtr<FJsonValueObject>& Value );
 
+	FJsonLibraryObject( const UStruct* StructType, const void* StructPtr );
+
 public:
+
+	FJsonLibraryObject( const TSharedPtr<FStructOnScope>& StructData );
+	
+	template<typename StructType>
+	FJsonLibraryObject( const StructType& Struct )
+		: FJsonLibraryObject( StructType::StaticStruct(), &Struct )
+	{
+	}
 
 	FJsonLibraryObject();
 	FJsonLibraryObject( const FJsonLibraryObjectNotify& Notify );
@@ -190,7 +203,7 @@ protected:
 	const TSharedPtr<FJsonObject> GetJsonObject() const;
 	TSharedPtr<FJsonObject> SetJsonObject();
 
-	bool TryParse( const FString& Text );
+	bool TryParse( const FString& Text, bool bStripComments = false, bool bStripTrailingCommas = false );
 	bool TryStringify( FString& Text, bool bCondensed = true ) const;
 
 private:
@@ -228,9 +241,32 @@ public:
 	static FJsonLibraryObject Parse( const FString& Text );
 	// Parse a JSON string.
 	static FJsonLibraryObject Parse( const FString& Text, const FJsonLibraryObjectNotify& Notify );
+	
+	// Parse a relaxed JSON string.
+	static FJsonLibraryObject ParseRelaxed( const FString& Text, bool bStripComments = true, bool bStripTrailingCommas = true );
 
 	// Stringify this object as a JSON string.
-	FString Stringify() const;
+	FString Stringify( bool bCondensed = true ) const;
+
+protected:
+	
+	bool ToStruct( const UStruct* StructType, void* StructPtr ) const;
+
+public:
+
+	// Convert this object to structure memory.
+	TSharedPtr<FStructOnScope> ToStruct( const UStruct* StructType ) const;
+
+	// Convert this object to a structure.
+	template<typename StructType>
+	StructType ToStruct() const
+	{
+		StructType Struct;
+		if ( ToStruct( StructType::StaticStruct(), &Struct ) )
+			return Struct;
+		
+		return StructType();
+	}
 
 	// Convert this object to a linear color.
 	FLinearColor ToLinearColor() const;

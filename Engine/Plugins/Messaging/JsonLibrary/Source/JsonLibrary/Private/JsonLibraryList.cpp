@@ -1264,7 +1264,7 @@ TArray<TSharedPtr<FJsonValue>>* FJsonLibraryList::SetJsonArray()
 	return const_cast<TArray<TSharedPtr<FJsonValue>>*>( GetJsonArray() );
 }
 
-bool FJsonLibraryList::TryParse( const FString& Text )
+bool FJsonLibraryList::TryParse( const FString& Text, bool bStripComments /*= false*/, bool bStripTrailingCommas /*= false*/ )
 {
 	if ( Text.IsEmpty() )
 		return false;
@@ -1272,6 +1272,9 @@ bool FJsonLibraryList::TryParse( const FString& Text )
 	FString TrimmedText = Text;
 	TrimmedText.TrimStartInline();
 	TrimmedText.TrimEndInline();
+
+	if ( bStripComments || bStripTrailingCommas )
+		TrimmedText = UJsonLibraryHelpers::StripCommentsOrCommas( TrimmedText, bStripComments, bStripTrailingCommas );
 	
 	if ( !TrimmedText.StartsWith( "[" ) || !TrimmedText.EndsWith( "]" ) )
 		return false;
@@ -1461,10 +1464,19 @@ FJsonLibraryList FJsonLibraryList::Parse( const FString& Text, const FJsonLibrar
 	return List;
 }
 
-FString FJsonLibraryList::Stringify() const
+FJsonLibraryList FJsonLibraryList::ParseRelaxed( const FString& Text, bool bStripComments /*= true*/, bool bStripTrailingCommas /*= true*/ )
+{
+	FJsonLibraryList List = TSharedPtr<FJsonValueArray>();
+	if ( !List.TryParse( Text, bStripComments, bStripTrailingCommas ) )
+		List.JsonArray.Reset();
+	
+	return List;
+}
+
+FString FJsonLibraryList::Stringify( bool bCondensed /*= true*/ ) const
 {
 	FString Text;
-	if ( TryStringify( Text ) )
+	if ( TryStringify( Text, bCondensed ) )
 		return Text;
 
 	return FString();

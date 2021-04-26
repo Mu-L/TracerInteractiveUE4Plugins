@@ -19,8 +19,8 @@ public:
 #endif
 
 	// Parse a JSON string.
-	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Parse"), Category = "JSON Library")
-	static FJsonLibraryValue Parse( const FString& Text );
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Parse", AdvancedDisplay = "bComments,bTrailingCommas"), Category = "JSON Library")
+	static FJsonLibraryValue Parse( const FString& Text, bool bComments = false, bool bTrailingCommas = false );
 	
 	// Parse a JSON object string.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Parse Object", AutoCreateRefTerm = "Notify", AdvancedDisplay = "Notify"), Category = "JSON Library|Object")
@@ -451,8 +451,8 @@ public:
 	static bool JsonValue_IsVector( UPARAM(ref) const FJsonLibraryValue& Target );
 
 	// Stringify this value.
-	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Stringify"), Category = "JSON Library|Value")
-	static FString JsonValue_Stringify( UPARAM(ref) const FJsonLibraryValue& Target );
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Stringify", AdvancedDisplay = "bCondensed"), Category = "JSON Library|Value")
+	static FString JsonValue_Stringify( UPARAM(ref) const FJsonLibraryValue& Target, bool bCondensed = true );
 
 
 	// Check if this object equals another object.
@@ -647,8 +647,8 @@ public:
 	static bool JsonObject_IsVector( UPARAM(ref) const FJsonLibraryObject& Target );
 
 	// Stringify this object.
-	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Stringify"), Category = "JSON Library|Object")
-	static FString JsonObject_Stringify( UPARAM(ref) const FJsonLibraryObject& Target );
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Stringify", AdvancedDisplay = "bCondensed"), Category = "JSON Library|Object")
+	static FString JsonObject_Stringify( UPARAM(ref) const FJsonLibraryObject& Target, bool bCondensed = true );
 
 
 	// Check if this list equals another list.
@@ -1077,6 +1077,11 @@ public:
 	static bool JsonList_IsEmpty( UPARAM(ref) const FJsonLibraryList& Target );
 	
 	// Stringify this list.
-	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Stringify"), Category = "JSON Library|List")
-	static FString JsonList_Stringify( UPARAM(ref) const FJsonLibraryList& Target );
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Stringify", AdvancedDisplay = "bCondensed"), Category = "JSON Library|List")
+	static FString JsonList_Stringify( UPARAM(ref) const FJsonLibraryList& Target, bool bCondensed = true );
+
+public:
+
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Strip Comments/Commas (JSON)", AdvancedDisplay = "bComments,bTrailingCommas"), Category = "JSON Library|Helpers")
+	static FString StripCommentsOrCommas( const FString& Text, bool bComments = true, bool bTrailingCommas = true );
 };

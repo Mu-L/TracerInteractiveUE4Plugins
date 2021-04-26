@@ -116,7 +116,7 @@ protected:
 	
 	TSharedPtr<FJsonValue> JsonValue;
 
-	bool TryParse( const FString& Text );
+	bool TryParse( const FString& Text, bool bStripComments = false, bool bStripTrailingCommas = false );
 	bool TryStringify( FString& Text, bool bCondensed = true ) const;
 
 public:
@@ -143,9 +143,11 @@ public:
 
 	// Parse a JSON string.
 	static FJsonLibraryValue Parse( const FString& Text );
+	// Parse a relaxed JSON string.
+	static FJsonLibraryValue ParseRelaxed( const FString& Text, bool bStripComments = true, bool bStripTrailingCommas = true );
 
 	// Stringify this value as a JSON string.
-	FString Stringify() const;
+	FString Stringify( bool bCondensed = true ) const;
 
 	// Copy this value to an array of JSON values.
 	TArray<FJsonLibraryValue> ToArray() const;

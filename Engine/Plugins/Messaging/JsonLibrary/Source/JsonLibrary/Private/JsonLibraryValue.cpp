@@ -440,7 +440,7 @@ uint64 FJsonLibraryValue::GetUInt64() const
 	return (uint64)GetNumber();
 }
 
-bool FJsonLibraryValue::TryParse( const FString& Text )
+bool FJsonLibraryValue::TryParse( const FString& Text, bool bStripComments /*= false*/, bool bStripTrailingCommas /*= false*/ )
 {
 	if ( Text.IsEmpty() )
 		return false;
@@ -448,6 +448,9 @@ bool FJsonLibraryValue::TryParse( const FString& Text )
 	FString TrimmedText = Text;
 	TrimmedText.TrimStartInline();
 	TrimmedText.TrimEndInline();
+
+	if ( bStripComments || bStripTrailingCommas )
+		TrimmedText = UJsonLibraryHelpers::StripCommentsOrCommas( TrimmedText, bStripComments, bStripTrailingCommas );
 
 	if ( ( TrimmedText.StartsWith( "{" ) && TrimmedText.EndsWith( "}" ) )
 	  || ( TrimmedText.StartsWith( "[" ) && TrimmedText.EndsWith( "]" ) ) )
@@ -675,10 +678,19 @@ FJsonLibraryValue FJsonLibraryValue::Parse( const FString& Text )
 	return Value;
 }
 
-FString FJsonLibraryValue::Stringify() const
+FJsonLibraryValue FJsonLibraryValue::ParseRelaxed( const FString& Text, bool bStripComments /*= true*/, bool bStripTrailingCommas /*= true*/ )
+{
+	FJsonLibraryValue Value = TSharedPtr<FJsonValue>();
+	if ( !Value.TryParse( Text, bStripComments, bStripTrailingCommas ) )
+		Value.JsonValue.Reset();
+	
+	return Value;
+}
+
+FString FJsonLibraryValue::Stringify( bool bCondensed /*= true*/ ) const
 {
 	FString Text;
-	if ( TryStringify( Text ) )
+	if ( TryStringify( Text, bCondensed ) )
 		return Text;
 
 	return FString();

@@ -26,6 +26,16 @@
 				"Android",
 				"IOS"
 			]
+		},
+		{
+			"Name": "JsonLibraryBlueprintSupport",
+			"Type": "UncookedOnly",
+			"LoadingPhase": "PostConfigInit",
+			"WhitelistPlatforms": [
+				"Win64",
+				"Mac",
+				"Linux"
+			]
 		}
 	]
 }

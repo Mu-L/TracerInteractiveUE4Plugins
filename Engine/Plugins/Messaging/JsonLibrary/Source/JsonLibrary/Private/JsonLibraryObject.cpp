@@ -1,5 +1,6 @@
 // Copyright 2021 Tracer Interactive, LLC. All Rights Reserved.
 #include "JsonLibraryObject.h"
+#include "JsonLibraryConverter.h"
 #include "JsonLibraryList.h"
 #include "JsonLibraryHelpers.h"
 #include "Policies/CondensedJsonPrintPolicy.h"
@@ -14,6 +15,38 @@ FJsonLibraryObject::FJsonLibraryObject( const TSharedPtr<FJsonValue>& Value )
 FJsonLibraryObject::FJsonLibraryObject( const TSharedPtr<FJsonValueObject>& Value )
 {
 	JsonObject = Value;
+}
+
+FJsonLibraryObject::FJsonLibraryObject( const UStruct* StructType, const void* StructPtr )
+	: FJsonLibraryObject()
+{
+	if ( StructType && StructPtr )
+	{
+		TSharedPtr<FJsonObject> Json = SetJsonObject();
+		if ( Json.IsValid() )
+		{
+			if ( !FJsonLibraryConverter::UStructToJsonObject( StructType, StructPtr, Json.ToSharedRef() ) )
+				JsonObject.Reset();
+		}
+	}
+	else
+		JsonObject.Reset();
+}
+
+FJsonLibraryObject::FJsonLibraryObject( const TSharedPtr<FStructOnScope>& StructData )
+	: FJsonLibraryObject()
+{
+	if ( StructData.IsValid() )
+	{
+		TSharedPtr<FJsonObject> Json = SetJsonObject();
+		if ( Json.IsValid() )
+		{
+			if ( !FJsonLibraryConverter::UStructToJsonObject( StructData->GetStruct(), StructData->GetStructMemory(), Json.ToSharedRef() ) )
+				JsonObject.Reset();
+		}
+	}
+	else
+		JsonObject.Reset();
 }
 
 FJsonLibraryObject::FJsonLibraryObject()
@@ -589,7 +622,7 @@ TSharedPtr<FJsonObject> FJsonLibraryObject::SetJsonObject()
 	return GetJsonObject();
 }
 
-bool FJsonLibraryObject::TryParse( const FString& Text )
+bool FJsonLibraryObject::TryParse( const FString& Text, bool bStripComments /*= false*/, bool bStripTrailingCommas /*= false*/ )
 {
 	if ( Text.IsEmpty() )
 		return false;
@@ -597,6 +630,9 @@ bool FJsonLibraryObject::TryParse( const FString& Text )
 	FString TrimmedText = Text;
 	TrimmedText.TrimStartInline();
 	TrimmedText.TrimEndInline();
+
+	if ( bStripComments || bStripTrailingCommas )
+		TrimmedText = UJsonLibraryHelpers::StripCommentsOrCommas( TrimmedText, bStripComments, bStripTrailingCommas );
 
 	if ( !TrimmedText.StartsWith( "{" ) || !TrimmedText.EndsWith( "}" ) )
 		return false;
@@ -848,13 +884,47 @@ FJsonLibraryObject FJsonLibraryObject::Parse( const FString& Text, const FJsonLi
 	return Object;
 }
 
-FString FJsonLibraryObject::Stringify() const
+FJsonLibraryObject FJsonLibraryObject::ParseRelaxed( const FString& Text, bool bStripComments /*= true*/, bool bStripTrailingCommas /*= true*/ )
+{
+	FJsonLibraryObject Object = TSharedPtr<FJsonValueObject>();
+	if ( !Object.TryParse( Text, bStripComments, bStripTrailingCommas ) )
+		Object.JsonObject.Reset();
+	
+	return Object;
+}
+
+FString FJsonLibraryObject::Stringify( bool bCondensed /*= true*/ ) const
 {
 	FString Text;
-	if ( TryStringify( Text ) )
+	if ( TryStringify( Text, bCondensed ) )
 		return Text;
 
 	return FString();
+}
+
+
+bool FJsonLibraryObject::ToStruct( const UStruct* StructType, void* StructPtr ) const
+{
+	if ( !StructType || !StructPtr )
+		return false;
+
+	const TSharedPtr<FJsonObject> Json = GetJsonObject();
+	if ( !Json.IsValid() )
+		return false;
+	
+	return FJsonLibraryConverter::JsonObjectToUStruct( Json.ToSharedRef(), StructType, StructPtr );
+}
+
+TSharedPtr<FStructOnScope> FJsonLibraryObject::ToStruct( const UStruct* StructType ) const
+{
+	if ( StructType )
+	{
+		TSharedPtr<FStructOnScope> StructData = MakeShareable( new FStructOnScope( StructType ) );
+		if ( ToStruct( StructType, StructData->GetStructMemory() ) )
+			return StructData;
+	}
+
+	return TSharedPtr<FStructOnScope>();
 }
 
 FLinearColor FJsonLibraryObject::ToLinearColor() const

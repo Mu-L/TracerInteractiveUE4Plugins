@@ -1,8 +1,11 @@
 // Copyright 2021 Tracer Interactive, LLC. All Rights Reserved.
 #include "JsonLibraryHelpers.h"
 
-FJsonLibraryValue UJsonLibraryHelpers::Parse( const FString& Text )
+FJsonLibraryValue UJsonLibraryHelpers::Parse( const FString& Text, bool bComments /*= false*/, bool bTrailingCommas /*= false*/ )
 {
+	if ( bComments || bTrailingCommas )
+		return FJsonLibraryValue::ParseRelaxed( Text, bComments, bTrailingCommas );
+
 	return FJsonLibraryValue::Parse( Text );
 }
 
@@ -632,9 +635,9 @@ bool UJsonLibraryHelpers::JsonValue_IsVector( const FJsonLibraryValue& Target )
 	return Target.IsVector();
 }
 
-FString UJsonLibraryHelpers::JsonValue_Stringify( const FJsonLibraryValue& Target )
+FString UJsonLibraryHelpers::JsonValue_Stringify( const FJsonLibraryValue& Target, bool bCondensed /*= true*/ )
 {
-	return Target.Stringify();
+	return Target.Stringify( bCondensed );
 }
 
 
@@ -948,9 +951,9 @@ bool UJsonLibraryHelpers::JsonObject_IsVector( const FJsonLibraryObject& Target 
 	return Target.IsVector();
 }
 
-FString UJsonLibraryHelpers::JsonObject_Stringify( const FJsonLibraryObject& Target )
+FString UJsonLibraryHelpers::JsonObject_Stringify( const FJsonLibraryObject& Target, bool bCondensed /*= true*/ )
 {
-	return Target.Stringify();
+	return Target.Stringify( bCondensed );
 }
 
 
@@ -1670,7 +1673,123 @@ bool UJsonLibraryHelpers::JsonList_IsEmpty( const FJsonLibraryList& Target )
 	return Target.IsEmpty();
 }
 
-FString UJsonLibraryHelpers::JsonList_Stringify( const FJsonLibraryList& Target )
+FString UJsonLibraryHelpers::JsonList_Stringify( const FJsonLibraryList& Target, bool bCondensed /*= true*/ )
 {
-	return Target.Stringify();
+	return Target.Stringify( bCondensed );
+}
+
+FString UJsonLibraryHelpers::StripCommentsOrCommas( const FString& Text, bool bComments /*= true*/, bool bTrailingCommas /*= true*/ )
+{
+	if ( !bComments && !bTrailingCommas )
+		return Text;
+
+	int32 BlockComment  = -1;
+	int32 LineComment   = -1;
+	int32 TrailingComma = -1;
+
+	bool bStringLiteral   = false;
+	bool bEscapeCharacter = false;
+
+	int32 Length = Text.Len();
+	FString StrippedText = Text;
+	for ( int32 Index = 0; Index < Length; Index++ )
+	{
+		auto StrippedCharacter = StrippedText[ Index ];
+		if ( BlockComment >= 0 )
+		{
+			if ( StrippedCharacter == '*' && Index + 1 < Length && StrippedText[ Index + 1 ] == '/' )
+			{
+				if ( bComments )
+				{
+					StrippedText = Index + 2 < Length ?
+								   StrippedText.Left( BlockComment ) + StrippedText.RightChop( Index + 2 ) :
+								   StrippedText.Left( BlockComment );
+
+					int32 CommentLength = Index + 2 - BlockComment;
+					Length -= CommentLength;
+					Index  -= CommentLength - 1;
+				}
+
+				BlockComment = -1;
+			}
+
+			continue;
+		}
+		else if ( LineComment >= 0 )
+		{
+			if ( StrippedCharacter == '\r' || StrippedCharacter == '\n' )
+			{
+				if ( bComments )
+				{
+					StrippedText = StrippedText.Left( LineComment ) + StrippedText.RightChop( Index );
+				
+					int32 CommentLength = Index - LineComment;
+					Length -= CommentLength;
+					Index  -= CommentLength;
+				}
+
+				LineComment = -1;
+			}
+
+			continue;
+		}
+		else if ( !bStringLiteral && StrippedCharacter == '/' && Index + 1 < Length )
+		{
+			if ( StrippedText[ Index + 1 ] == '*' )
+			{
+				BlockComment = Index;
+				++Index;
+			}
+			else if ( StrippedText[ Index + 1 ] == '/' )
+			{
+				LineComment = Index;
+				++Index;
+			}
+			else
+				TrailingComma = -1;
+			
+			bEscapeCharacter = false;
+			continue;
+		}
+		else if ( !bStringLiteral && TrailingComma >= 0 && ( StrippedCharacter == '}'
+														  || StrippedCharacter == ']' ) )
+		{
+			if ( bTrailingCommas )
+			{
+				StrippedText = StrippedText.Left( TrailingComma ) + StrippedText.RightChop( TrailingComma + 1 );
+				
+				Length -= 1;
+				Index  -= 1;
+			}
+
+			TrailingComma    = -1;
+			bEscapeCharacter = false;
+			continue;
+		}
+
+		if ( bStringLiteral )
+			TrailingComma = -1;
+		else if ( StrippedCharacter == ',' )
+			TrailingComma = Index;
+		else if ( !FChar::IsWhitespace( StrippedCharacter ) && StrippedCharacter != '\r'
+															&& StrippedCharacter != '\n')
+			TrailingComma = -1;
+		
+		if ( !bEscapeCharacter )
+		{
+			if ( StrippedCharacter == '"' )
+				bStringLiteral = !bStringLiteral;
+			else if ( StrippedCharacter == '\\' )
+				bEscapeCharacter = true;
+		}
+		else
+			bEscapeCharacter = false;
+	}
+
+	if ( BlockComment >= 0 )
+		StrippedText = StrippedText.Left( BlockComment );
+	else if ( LineComment >= 0 )
+		StrippedText = StrippedText.Left( LineComment );
+	
+	return StrippedText;
 }
