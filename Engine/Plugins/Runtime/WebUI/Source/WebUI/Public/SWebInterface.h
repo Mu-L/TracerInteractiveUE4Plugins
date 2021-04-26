@@ -1,4 +1,4 @@
-// Copyright 2020 Tracer Interactive, LLC. All Rights Reserved.
+// Copyright 2021 Tracer Interactive, LLC. All Rights Reserved.
 #pragma once
 #include "CoreMinimal.h"
 #include "Engine/Texture.h"
@@ -8,20 +8,21 @@
 #include "Widgets/SWindow.h"
 
 #if !UE_SERVER
-#include "SWebBrowserView.h"
+#include "SWebInterfaceBrowserView.h"
 
-class SWebBrowserView;
-class IWebBrowserDialog;
-class IWebBrowserWindow;
+class SWebInterfaceBrowserView;
+class IWebInterfaceBrowserAdapter;
+class IWebInterfaceBrowserDialog;
+class IWebInterfaceBrowserWindow;
 struct FWebNavigationRequest;
-enum class EWebBrowserDialogEventResponse;
+enum class EWebInterfaceBrowserDialogEventResponse;
 
 class WEBUI_API SWebInterface : public SCompoundWidget
 {
 public:
 	DECLARE_DELEGATE_RetVal_TwoParams( bool, FOnBeforeBrowse, const FString& /*Url*/, const FWebNavigationRequest& /*Request*/ );
 	DECLARE_DELEGATE_RetVal_ThreeParams( bool, FOnLoadUrl, const FString& /*Method*/, const FString& /*Url*/, FString& /* Response */ );
-	DECLARE_DELEGATE_RetVal_OneParam( EWebBrowserDialogEventResponse, FOnShowDialog, const TWeakPtr<IWebBrowserDialog>& );
+	DECLARE_DELEGATE_RetVal_OneParam( EWebInterfaceBrowserDialogEventResponse, FOnShowDialog, const TWeakPtr<IWebInterfaceBrowserDialog>& );
 
 	DECLARE_DELEGATE_RetVal( bool, FOnSuppressContextMenu );
 
@@ -42,6 +43,7 @@ public:
 		SLATE_ARGUMENT( FString, InitialURL )
 		SLATE_ARGUMENT( TOptional<FString>, ContentsToLoad )
 		SLATE_ARGUMENT( FColor, BackgroundColor )
+		SLATE_ARGUMENT( bool, NativeCursors )
 		SLATE_ARGUMENT( bool, EnableMouseTransparency )
 		SLATE_ARGUMENT( bool, EnableVirtualPointerTransparency )
 		SLATE_ARGUMENT( float, TransparencyDelay )
@@ -83,16 +85,18 @@ private:
 	bool HandleBeforePopup( FString URL, FString Frame );
 	bool HandleSuppressContextMenu();
 
-	bool HandleCreateWindow( const TWeakPtr<IWebBrowserWindow>& NewBrowserWindow, const TWeakPtr<IWebBrowserPopupFeatures>& PopupFeatures );
-	bool HandleCloseWindow( const TWeakPtr<IWebBrowserWindow>& BrowserWindowPtr );
+	bool HandleCreateWindow( const TWeakPtr<IWebInterfaceBrowserWindow>& NewBrowserWindow, const TWeakPtr<IWebInterfaceBrowserPopupFeatures>& PopupFeatures );
+	bool HandleCloseWindow( const TWeakPtr<IWebInterfaceBrowserWindow>& BrowserWindowPtr );
 
 protected:
 
-	TSharedPtr<SWebBrowserView>   BrowserView;
-	TSharedPtr<IWebBrowserWindow> BrowserWindow;
+	static bool bPAK;
+
+	TSharedPtr<SWebInterfaceBrowserView>   BrowserView;
+	TSharedPtr<IWebInterfaceBrowserWindow> BrowserWindow;
 
 #if UE_BUILD_DEVELOPMENT || UE_BUILD_DEBUG
-	TMap<TWeakPtr<IWebBrowserWindow>, TWeakPtr<SWindow>> BrowserWindowWidgets;
+	TMap<TWeakPtr<IWebInterfaceBrowserWindow>, TWeakPtr<SWindow>> BrowserWindowWidgets;
 #endif
 
 	bool bMouseTransparency;
@@ -148,5 +152,11 @@ public:
 
 	void BindUObject( const FString& Name, UObject* Object, bool bIsPermanent = true );
 	void UnbindUObject( const FString& Name, UObject* Object, bool bIsPermanent = true );
+
+	void BindAdapter( const TSharedRef<IWebInterfaceBrowserAdapter>& Adapter );
+	void UnbindAdapter( const TSharedRef<IWebInterfaceBrowserAdapter>& Adapter );
+
+	void BindInputMethodSystem( ITextInputMethodSystem* TextInputMethodSystem );
+	void UnbindInputMethodSystem();
 };
 #endif

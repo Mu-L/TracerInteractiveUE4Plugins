@@ -1,4 +1,4 @@
-// Copyright 2020 Tracer Interactive, LLC. All Rights Reserved.
+// Copyright 2021 Tracer Interactive, LLC. All Rights Reserved.
 #include "WebInterface.h"
 #include "WebInterfaceObject.h"
 #include "PlatformHttp.h"
@@ -50,6 +50,8 @@ UWebInterface::UWebInterface( const FObjectInitializer& ObjectInitializer )
 	bEnableVirtualPointerTransparency   = false;
 	VirtualPointerTransparencyThreshold = 0.333f;
 
+	bCustomCursors = false;
+
 #if WITH_EDITOR || PLATFORM_ANDROID
 	struct FConstructorStatics
 	{
@@ -65,6 +67,34 @@ UWebInterface::UWebInterface( const FObjectInitializer& ObjectInitializer )
 	UWebBrowserTexture::StaticClass();// hard reference
 	DefaultMaterial = (UMaterial*)ConstructorStatics.DefaultTextureMaterial.Object;
 #endif
+}
+
+bool UWebInterface::Load( const FString& File )
+{
+	static FString Scheme = "pak";
+	if ( File.Len() <= 0 )
+		return false;
+
+	FString URL = Scheme;
+	if ( !URL.EndsWith( "://" ) )
+		URL += "://";
+
+	FString FilePath = File;
+	FilePath = FilePath.Replace( TEXT( "\\" ), TEXT( "/" ) );
+	FilePath = FilePath.Replace( TEXT( "//" ), TEXT( "/" ) );
+
+	URL += FilePath;
+#if !UE_SERVER
+	if ( WebInterfaceWidget.IsValid() )
+		WebInterfaceWidget->LoadURL( URL );
+#endif
+
+	FilePath = FPaths::ProjectContentDir() + File;
+	FilePath = FilePath.Replace( TEXT( "\\" ), TEXT( "/" ) );
+	FilePath = FilePath.Replace( TEXT( "//" ), TEXT( "/" ) );
+
+	const int64 FileSize = IFileManager::Get().FileSize( *FilePath );
+	return FileSize != INDEX_NONE;
 }
 
 void UWebInterface::LoadHTML( const FString& HTML )
@@ -190,6 +220,22 @@ void UWebInterface::Unbind( const FString& Name, UObject* Object )
 #if !UE_SERVER
 	if ( WebInterfaceWidget.IsValid() )
 		WebInterfaceWidget->UnbindUObject( Name, Object );
+#endif
+}
+
+void UWebInterface::EnableIME()
+{
+#if !UE_SERVER
+	if ( WebInterfaceWidget.IsValid() )
+		WebInterfaceWidget->BindInputMethodSystem( FSlateApplication::Get().GetTextInputMethodSystem() );
+#endif
+}
+
+void UWebInterface::DisableIME()
+{
+#if !UE_SERVER
+	if ( WebInterfaceWidget.IsValid() )
+		WebInterfaceWidget->UnbindInputMethodSystem();
 #endif
 }
 
@@ -420,6 +466,7 @@ TSharedRef<SWidget> UWebInterface::RebuildWidget()
 	WebInterfaceWidget = SNew( SWebInterface )
 		.FrameRate( FrameRate )
 		.InitialURL( InitialURL )
+		.NativeCursors( !bCustomCursors )
 		.EnableMouseTransparency( bEnableMouseTransparency )
 		.EnableVirtualPointerTransparency( bEnableVirtualPointerTransparency )
 		.TransparencyDelay( MouseTransparencyDelay )

@@ -6,14 +6,27 @@
 	"Description": "Create a web-based user interface using the Chromium Embedded Framework.",
 	"Category": "Widgets",
 	"CreatedBy": "Tracer Interactive",
-	"CreatedByURL": "http://tracerinteractive.com",
-	"DocsURL": "http://cdn.tracerinteractive.com/webui/documentation.pdf",
+	"CreatedByURL": "https://tracerinteractive.com",
+	"DocsURL": "https://cdn.tracerinteractive.com/webui/documentation.pdf",
 	"MarketplaceURL": "",
 	"SupportURL": "",
 	"EngineVersion": "4.25.0",
 	"CanContainContent": false,
 	"Installed": true,
 	"Modules": [
+		{
+			"Name": "WebBrowserUI",
+			"Type": "Runtime",
+			"LoadingPhase": "PreDefault",
+			"WhitelistPlatforms": [
+				"Win64",
+				"Win32",
+				"Mac",
+				"Linux",
+				"Android",
+				"IOS"
+			]
+		},
 		{
 			"Name": "WebUI",
 			"Type": "Runtime",

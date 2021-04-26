@@ -1,4 +1,4 @@
-// Copyright 2020 Tracer Interactive, LLC. All Rights Reserved.
+// Copyright 2021 Tracer Interactive, LLC. All Rights Reserved.
 #include "WebInterfaceHelpers.h"
 
 bool UWebInterfaceHelpers::WebInterfaceCallback_IsValid( const FWebInterfaceCallback& Target )
