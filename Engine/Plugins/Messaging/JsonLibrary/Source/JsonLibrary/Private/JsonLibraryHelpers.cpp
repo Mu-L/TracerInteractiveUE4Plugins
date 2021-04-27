@@ -1,8 +1,11 @@
-// Copyright 2020 Tracer Interactive, LLC. All Rights Reserved.
+// Copyright 2021 Tracer Interactive, LLC. All Rights Reserved.
 #include "JsonLibraryHelpers.h"
 
-FJsonLibraryValue UJsonLibraryHelpers::Parse( const FString& Text )
+FJsonLibraryValue UJsonLibraryHelpers::Parse( const FString& Text, bool bComments /*= false*/, bool bTrailingCommas /*= false*/ )
 {
+	if ( bComments || bTrailingCommas )
+		return FJsonLibraryValue::ParseRelaxed( Text, bComments, bTrailingCommas );
+
 	return FJsonLibraryValue::Parse( Text );
 }
 
@@ -57,6 +60,26 @@ FJsonLibraryValue UJsonLibraryHelpers::FromInteger( int32 Value )
 }
 
 FJsonLibraryValue UJsonLibraryHelpers::FromString( const FString& Value )
+{
+	return FJsonLibraryValue( Value );
+}
+
+FJsonLibraryValue UJsonLibraryHelpers::FromDateTime( const FDateTime& Value )
+{
+	return FJsonLibraryValue( Value );
+}
+
+FJsonLibraryValue UJsonLibraryHelpers::FromGuid( const FGuid& Value )
+{
+	return FJsonLibraryValue( Value );
+}
+
+FJsonLibraryValue UJsonLibraryHelpers::FromColor( const FColor& Value )
+{
+	return FJsonLibraryValue( Value );
+}
+
+FJsonLibraryValue UJsonLibraryHelpers::FromLinearColor( const FLinearColor& Value )
 {
 	return FJsonLibraryValue( Value );
 }
@@ -116,6 +139,26 @@ FJsonLibraryValue UJsonLibraryHelpers::FromStringArray( const TArray<FString>& V
 	return FromList( FJsonLibraryList( Value ) );
 }
 
+FJsonLibraryValue UJsonLibraryHelpers::FromDateTimeArray( const TArray<FDateTime>& Value )
+{
+	return FromList( FJsonLibraryList( Value ) );
+}
+
+FJsonLibraryValue UJsonLibraryHelpers::FromGuidArray( const TArray<FGuid>& Value )
+{
+	return FromList( FJsonLibraryList( Value ) );
+}
+
+FJsonLibraryValue UJsonLibraryHelpers::FromColorArray( const TArray<FColor>& Value )
+{
+	return FromList( FJsonLibraryList( Value ) );
+}
+
+FJsonLibraryValue UJsonLibraryHelpers::FromLinearColorArray( const TArray<FLinearColor>& Value )
+{
+	return FromList( FJsonLibraryList( Value ) );
+}
+
 FJsonLibraryValue UJsonLibraryHelpers::FromRotatorArray( const TArray<FRotator>& Value )
 {
 	return FromList( FJsonLibraryList( Value ) );
@@ -156,6 +199,26 @@ FJsonLibraryValue UJsonLibraryHelpers::FromStringMap( const TMap<FString, FStrin
 	return FromObject( FJsonLibraryObject( Value ) );
 }
 
+FJsonLibraryValue UJsonLibraryHelpers::FromDateTimeMap( const TMap<FString, FDateTime>& Value )
+{
+	return FromObject( FJsonLibraryObject( Value ) );
+}
+
+FJsonLibraryValue UJsonLibraryHelpers::FromGuidMap( const TMap<FString, FGuid>& Value )
+{
+	return FromObject( FJsonLibraryObject( Value ) );
+}
+
+FJsonLibraryValue UJsonLibraryHelpers::FromColorMap( const TMap<FString, FColor>& Value )
+{
+	return FromObject( FJsonLibraryObject( Value ) );
+}
+
+FJsonLibraryValue UJsonLibraryHelpers::FromLinearColorMap( const TMap<FString, FLinearColor>& Value )
+{
+	return FromObject( FJsonLibraryObject( Value ) );
+}
+
 FJsonLibraryValue UJsonLibraryHelpers::FromRotatorMap( const TMap<FString, FRotator>& Value )
 {
 	return FromObject( FJsonLibraryObject( Value ) );
@@ -189,6 +252,26 @@ int32 UJsonLibraryHelpers::ToInteger( const FJsonLibraryValue& Value )
 FString UJsonLibraryHelpers::ToString( const FJsonLibraryValue& Value )
 {
 	return Value.GetString();
+}
+
+FDateTime UJsonLibraryHelpers::ToDateTime( const FJsonLibraryValue& Value )
+{
+	return Value.GetDateTime();
+}
+
+FGuid UJsonLibraryHelpers::ToGuid( const FJsonLibraryValue& Value )
+{
+	return Value.GetGuid();
+}
+
+FColor UJsonLibraryHelpers::ToColor( const FJsonLibraryValue& Value )
+{
+	return Value.GetColor();
+}
+
+FLinearColor UJsonLibraryHelpers::ToLinearColor( const FJsonLibraryValue& Value )
+{
+	return Value.GetLinearColor();
 }
 
 FRotator UJsonLibraryHelpers::ToRotator( const FJsonLibraryValue& Value )
@@ -246,6 +329,26 @@ TArray<FString> UJsonLibraryHelpers::ToStringArray( const FJsonLibraryValue& Tar
 	return Target.GetList().ToStringArray();
 }
 
+TArray<FDateTime> UJsonLibraryHelpers::ToDateTimeArray( const FJsonLibraryValue& Target )
+{
+	return Target.GetList().ToDateTimeArray();
+}
+
+TArray<FGuid> UJsonLibraryHelpers::ToGuidArray( const FJsonLibraryValue& Target )
+{
+	return Target.GetList().ToGuidArray();
+}
+
+TArray<FColor> UJsonLibraryHelpers::ToColorArray( const FJsonLibraryValue& Target )
+{
+	return Target.GetList().ToColorArray();
+}
+
+TArray<FLinearColor> UJsonLibraryHelpers::ToLinearColorArray( const FJsonLibraryValue& Target )
+{
+	return Target.GetList().ToLinearColorArray();
+}
+
 TArray<FRotator> UJsonLibraryHelpers::ToRotatorArray( const FJsonLibraryValue& Target )
 {
 	return Target.GetList().ToRotatorArray();
@@ -286,6 +389,26 @@ TMap<FString, FString> UJsonLibraryHelpers::ToStringMap( const FJsonLibraryValue
 	return Target.GetObject().ToStringMap();
 }
 
+TMap<FString, FDateTime> UJsonLibraryHelpers::ToDateTimeMap( const FJsonLibraryValue& Target )
+{
+	return Target.GetObject().ToDateTimeMap();
+}
+
+TMap<FString, FGuid> UJsonLibraryHelpers::ToGuidMap( const FJsonLibraryValue& Target )
+{
+	return Target.GetObject().ToGuidMap();
+}
+
+TMap<FString, FColor> UJsonLibraryHelpers::ToColorMap( const FJsonLibraryValue& Target )
+{
+	return Target.GetObject().ToColorMap();
+}
+
+TMap<FString, FLinearColor> UJsonLibraryHelpers::ToLinearColorMap( const FJsonLibraryValue& Target )
+{
+	return Target.GetObject().ToLinearColorMap();
+}
+
 TMap<FString, FRotator> UJsonLibraryHelpers::ToRotatorMap( const FJsonLibraryValue& Target )
 {
 	return Target.GetObject().ToRotatorMap();
@@ -301,6 +424,11 @@ TMap<FString, FVector> UJsonLibraryHelpers::ToVectorMap( const FJsonLibraryValue
 	return Target.GetObject().ToVectorMap();
 }
 
+FJsonLibraryObject UJsonLibraryHelpers::ConvertLinearColorToObject( const FLinearColor& Value )
+{
+	return FJsonLibraryObject( Value );
+}
+
 FJsonLibraryObject UJsonLibraryHelpers::ConvertRotatorToObject( const FRotator& Value )
 {
 	return FJsonLibraryObject( Value );
@@ -314,6 +442,11 @@ FJsonLibraryObject UJsonLibraryHelpers::ConvertTransformToObject( const FTransfo
 FJsonLibraryObject UJsonLibraryHelpers::ConvertVectorToObject( const FVector& Value )
 {
 	return FJsonLibraryObject( Value );
+}
+
+FLinearColor UJsonLibraryHelpers::ConvertObjectToLinearColor( const FJsonLibraryObject& Object )
+{
+	return Object.ToLinearColor();
 }
 
 FRotator UJsonLibraryHelpers::ConvertObjectToRotator( const FJsonLibraryObject& Object )
@@ -357,6 +490,26 @@ FJsonLibraryObject UJsonLibraryHelpers::ConvertIntegerMapToObject( const TMap<FS
 }
 
 FJsonLibraryObject UJsonLibraryHelpers::ConvertStringMapToObject( const TMap<FString, FString>& Value )
+{
+	return FJsonLibraryObject( Value );
+}
+
+FJsonLibraryObject UJsonLibraryHelpers::ConvertDateTimeMapToObject( const TMap<FString, FDateTime>& Value )
+{
+	return FJsonLibraryObject( Value );
+}
+
+FJsonLibraryObject UJsonLibraryHelpers::ConvertGuidMapToObject( const TMap<FString, FGuid>& Value )
+{
+	return FJsonLibraryObject( Value );
+}
+
+FJsonLibraryObject UJsonLibraryHelpers::ConvertColorMapToObject( const TMap<FString, FColor>& Value )
+{
+	return FJsonLibraryObject( Value );
+}
+
+FJsonLibraryObject UJsonLibraryHelpers::ConvertLinearColorMapToObject( const TMap<FString, FLinearColor>& Value )
 {
 	return FJsonLibraryObject( Value );
 }
@@ -406,6 +559,26 @@ FJsonLibraryList UJsonLibraryHelpers::ConvertStringArrayToList( const TArray<FSt
 	return FJsonLibraryList( Value );
 }
 
+FJsonLibraryList UJsonLibraryHelpers::ConvertDateTimeArrayToList( const TArray<FDateTime>& Value )
+{
+	return FJsonLibraryList( Value );
+}
+
+FJsonLibraryList UJsonLibraryHelpers::ConvertGuidArrayToList( const TArray<FGuid>& Value )
+{
+	return FJsonLibraryList( Value );
+}
+
+FJsonLibraryList UJsonLibraryHelpers::ConvertColorArrayToList( const TArray<FColor>& Value )
+{
+	return FJsonLibraryList( Value );
+}
+
+FJsonLibraryList UJsonLibraryHelpers::ConvertLinearColorArrayToList( const TArray<FLinearColor>& Value )
+{
+	return FJsonLibraryList( Value );
+}
+
 FJsonLibraryList UJsonLibraryHelpers::ConvertRotatorArrayToList( const TArray<FRotator>& Value )
 {
 	return FJsonLibraryList( Value );
@@ -442,6 +615,11 @@ bool UJsonLibraryHelpers::JsonValue_IsValid( const FJsonLibraryValue& Target )
 	return Target.IsValid();
 }
 
+bool UJsonLibraryHelpers::JsonValue_IsGuid( const FJsonLibraryValue& Target )
+{
+	return Target.IsGuid();
+}
+
 bool UJsonLibraryHelpers::JsonValue_IsRotator( const FJsonLibraryValue& Target )
 {
 	return Target.IsRotator();
@@ -457,9 +635,9 @@ bool UJsonLibraryHelpers::JsonValue_IsVector( const FJsonLibraryValue& Target )
 	return Target.IsVector();
 }
 
-FString UJsonLibraryHelpers::JsonValue_Stringify( const FJsonLibraryValue& Target )
+FString UJsonLibraryHelpers::JsonValue_Stringify( const FJsonLibraryValue& Target, bool bCondensed /*= true*/ )
 {
-	return Target.Stringify();
+	return Target.Stringify( bCondensed );
 }
 
 
@@ -520,6 +698,30 @@ FJsonLibraryObject& UJsonLibraryHelpers::JsonObject_AddStringMap( FJsonLibraryOb
 	return Target;
 }
 
+FJsonLibraryObject& UJsonLibraryHelpers::JsonObject_AddDateTimeMap( FJsonLibraryObject& Target, const TMap<FString, FDateTime>& Map )
+{
+	Target.AddDateTimeMap( Map );
+	return Target;
+}
+
+FJsonLibraryObject& UJsonLibraryHelpers::JsonObject_AddGuidMap( FJsonLibraryObject& Target, const TMap<FString, FGuid>& Map )
+{
+	Target.AddGuidMap( Map );
+	return Target;
+}
+
+FJsonLibraryObject& UJsonLibraryHelpers::JsonObject_AddColorMap( FJsonLibraryObject& Target, const TMap<FString, FColor>& Map )
+{
+	Target.AddColorMap( Map );
+	return Target;
+}
+
+FJsonLibraryObject& UJsonLibraryHelpers::JsonObject_AddLinearColorMap( FJsonLibraryObject& Target, const TMap<FString, FLinearColor>& Map )
+{
+	Target.AddLinearColorMap( Map );
+	return Target;
+}
+
 FJsonLibraryObject& UJsonLibraryHelpers::JsonObject_AddRotatorMap( FJsonLibraryObject& Target, const TMap<FString, FRotator>& Map )
 {
 	Target.AddRotatorMap( Map );
@@ -566,6 +768,26 @@ int32 UJsonLibraryHelpers::JsonObject_GetInteger( const FJsonLibraryObject& Targ
 FString UJsonLibraryHelpers::JsonObject_GetString( const FJsonLibraryObject& Target, const FString& Key )
 {
 	return Target.GetString( Key );
+}
+
+FDateTime UJsonLibraryHelpers::JsonObject_GetDateTime( const FJsonLibraryObject& Target, const FString& Key )
+{
+	return Target.GetDateTime( Key );
+}
+
+FGuid UJsonLibraryHelpers::JsonObject_GetGuid( const FJsonLibraryObject& Target, const FString& Key )
+{
+	return Target.GetGuid( Key );
+}
+
+FColor UJsonLibraryHelpers::JsonObject_GetColor( const FJsonLibraryObject& Target, const FString& Key )
+{
+	return Target.GetColor( Key );
+}
+
+FLinearColor UJsonLibraryHelpers::JsonObject_GetLinearColor( const FJsonLibraryObject& Target, const FString& Key )
+{
+	return Target.GetLinearColor( Key );
 }
 
 FRotator UJsonLibraryHelpers::JsonObject_GetRotator( const FJsonLibraryObject& Target, const FString& Key )
@@ -629,6 +851,30 @@ FJsonLibraryObject& UJsonLibraryHelpers::JsonObject_SetInteger( FJsonLibraryObje
 FJsonLibraryObject& UJsonLibraryHelpers::JsonObject_SetString( FJsonLibraryObject& Target, const FString& Key, const FString& Value )
 {
 	Target.SetString( Key, Value );
+	return Target;
+}
+
+FJsonLibraryObject& UJsonLibraryHelpers::JsonObject_SetDateTime( FJsonLibraryObject& Target, const FString& Key, const FDateTime& Value )
+{
+	Target.SetDateTime( Key, Value );
+	return Target;
+}
+
+FJsonLibraryObject& UJsonLibraryHelpers::JsonObject_SetGuid( FJsonLibraryObject& Target, const FString& Key, const FGuid& Value )
+{
+	Target.SetGuid( Key, Value );
+	return Target;
+}
+
+FJsonLibraryObject& UJsonLibraryHelpers::JsonObject_SetColor( FJsonLibraryObject& Target, const FString& Key, const FColor& Value )
+{
+	Target.SetColor( Key, Value );
+	return Target;
+}
+
+FJsonLibraryObject& UJsonLibraryHelpers::JsonObject_SetLinearColor( FJsonLibraryObject& Target, const FString& Key, const FLinearColor& Value )
+{
+	Target.SetLinearColor( Key, Value );
 	return Target;
 }
 
@@ -705,9 +951,9 @@ bool UJsonLibraryHelpers::JsonObject_IsVector( const FJsonLibraryObject& Target 
 	return Target.IsVector();
 }
 
-FString UJsonLibraryHelpers::JsonObject_Stringify( const FJsonLibraryObject& Target )
+FString UJsonLibraryHelpers::JsonObject_Stringify( const FJsonLibraryObject& Target, bool bCondensed /*= true*/ )
 {
-	return Target.Stringify();
+	return Target.Stringify( bCondensed );
 }
 
 
@@ -760,6 +1006,30 @@ FJsonLibraryList& UJsonLibraryHelpers::JsonList_AppendIntegerArray( FJsonLibrary
 FJsonLibraryList& UJsonLibraryHelpers::JsonList_AppendStringArray( FJsonLibraryList& Target, const TArray<FString>& Array )
 {
 	Target.AppendStringArray( Array );
+	return Target;
+}
+
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_AppendDateTimeArray( FJsonLibraryList& Target, const TArray<FDateTime>& Array )
+{
+	Target.AppendDateTimeArray( Array );
+	return Target;
+}
+
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_AppendGuidArray( FJsonLibraryList& Target, const TArray<FGuid>& Array )
+{
+	Target.AppendGuidArray( Array );
+	return Target;
+}
+
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_AppendColorArray( FJsonLibraryList& Target, const TArray<FColor>& Array )
+{
+	Target.AppendColorArray( Array );
+	return Target;
+}
+
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_AppendLinearColorArray( FJsonLibraryList& Target, const TArray<FLinearColor>& Array )
+{
+	Target.AppendLinearColorArray( Array );
 	return Target;
 }
 
@@ -817,6 +1087,30 @@ FJsonLibraryList& UJsonLibraryHelpers::JsonList_InjectStringArray( FJsonLibraryL
 	return Target;
 }
 
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_InjectDateTimeArray( FJsonLibraryList& Target, int32 Index, const TArray<FDateTime>& Array )
+{
+	Target.InjectDateTimeArray( Index, Array );
+	return Target;
+}
+
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_InjectGuidArray( FJsonLibraryList& Target, int32 Index, const TArray<FGuid>& Array )
+{
+	Target.InjectGuidArray( Index, Array );
+	return Target;
+}
+
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_InjectColorArray( FJsonLibraryList& Target, int32 Index, const TArray<FColor>& Array )
+{
+	Target.InjectColorArray( Index, Array );
+	return Target;
+}
+
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_InjectLinearColorArray( FJsonLibraryList& Target, int32 Index, const TArray<FLinearColor>& Array )
+{
+	Target.InjectLinearColorArray( Index, Array );
+	return Target;
+}
+
 FJsonLibraryList& UJsonLibraryHelpers::JsonList_InjectRotatorArray( FJsonLibraryList& Target, int32 Index, const TArray<FRotator>& Array )
 {
 	Target.InjectRotatorArray( Index, Array );
@@ -862,6 +1156,30 @@ FJsonLibraryList& UJsonLibraryHelpers::JsonList_AddInteger( FJsonLibraryList& Ta
 FJsonLibraryList& UJsonLibraryHelpers::JsonList_AddString( FJsonLibraryList& Target, const FString& Value )
 {
 	Target.AddString( Value );
+	return Target;
+}
+
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_AddDateTime( FJsonLibraryList& Target, const FDateTime& Value )
+{
+	Target.AddDateTime( Value );
+	return Target;
+}
+
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_AddGuid( FJsonLibraryList& Target, const FGuid& Value )
+{
+	Target.AddGuid( Value );
+	return Target;
+}
+
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_AddColor( FJsonLibraryList& Target, const FColor& Value )
+{
+	Target.AddColor( Value );
+	return Target;
+}
+
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_AddLinearColor( FJsonLibraryList& Target, const FLinearColor& Value )
+{
+	Target.AddLinearColor( Value );
 	return Target;
 }
 
@@ -937,6 +1255,30 @@ FJsonLibraryList& UJsonLibraryHelpers::JsonList_InsertString( FJsonLibraryList& 
 	return Target;
 }
 
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_InsertDateTime( FJsonLibraryList& Target, int32 Index, const FDateTime& Value )
+{
+	Target.InsertDateTime( Index, Value );
+	return Target;
+}
+
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_InsertGuid( FJsonLibraryList& Target, int32 Index, const FGuid& Value )
+{
+	Target.InsertGuid( Index, Value );
+	return Target;
+}
+
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_InsertColor( FJsonLibraryList& Target, int32 Index, const FColor& Value )
+{
+	Target.InsertColor( Index, Value );
+	return Target;
+}
+
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_InsertLinearColor( FJsonLibraryList& Target, int32 Index, const FLinearColor& Value )
+{
+	Target.InsertLinearColor( Index, Value );
+	return Target;
+}
+
 FJsonLibraryList& UJsonLibraryHelpers::JsonList_InsertRotator( FJsonLibraryList& Target, int32 Index, const FRotator& Value )
 {
 	Target.InsertRotator( Index, Value );
@@ -1005,6 +1347,26 @@ FString UJsonLibraryHelpers::JsonList_GetString( const FJsonLibraryList& Target,
 	return Target.GetString( Index );
 }
 
+FDateTime UJsonLibraryHelpers::JsonList_GetDateTime( const FJsonLibraryList& Target, int32 Index )
+{
+	return Target.GetDateTime( Index );
+}
+
+FGuid UJsonLibraryHelpers::JsonList_GetGuid( const FJsonLibraryList& Target, int32 Index )
+{
+	return Target.GetGuid( Index );
+}
+
+FColor UJsonLibraryHelpers::JsonList_GetColor( const FJsonLibraryList& Target, int32 Index )
+{
+	return Target.GetColor( Index );
+}
+
+FLinearColor UJsonLibraryHelpers::JsonList_GetLinearColor( const FJsonLibraryList& Target, int32 Index )
+{
+	return Target.GetLinearColor( Index );
+}
+
 FRotator UJsonLibraryHelpers::JsonList_GetRotator( const FJsonLibraryList& Target, int32 Index )
 {
 	return Target.GetRotator( Index );
@@ -1066,6 +1428,30 @@ FJsonLibraryList& UJsonLibraryHelpers::JsonList_SetInteger( FJsonLibraryList& Ta
 FJsonLibraryList& UJsonLibraryHelpers::JsonList_SetString( FJsonLibraryList& Target, int32 Index, const FString& Value )
 {
 	Target.SetString( Index, Value );
+	return Target;
+}
+
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_SetDateTime( FJsonLibraryList& Target, int32 Index, const FDateTime& Value )
+{
+	Target.SetDateTime( Index, Value );
+	return Target;
+}
+
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_SetGuid( FJsonLibraryList& Target, int32 Index, const FGuid& Value )
+{
+	Target.SetGuid( Index, Value );
+	return Target;
+}
+
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_SetColor( FJsonLibraryList& Target, int32 Index, const FColor& Value )
+{
+	Target.SetColor( Index, Value );
+	return Target;
+}
+
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_SetLinearColor( FJsonLibraryList& Target, int32 Index, const FLinearColor& Value )
+{
+	Target.SetLinearColor( Index, Value );
 	return Target;
 }
 
@@ -1147,6 +1533,30 @@ FJsonLibraryList& UJsonLibraryHelpers::JsonList_RemoveString( FJsonLibraryList& 
 	return Target;
 }
 
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_RemoveDateTime( FJsonLibraryList& Target, const FDateTime& Value )
+{
+	Target.RemoveDateTime( Value );
+	return Target;
+}
+
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_RemoveGuid( FJsonLibraryList& Target, const FGuid& Value )
+{
+	Target.RemoveGuid( Value );
+	return Target;
+}
+
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_RemoveColor( FJsonLibraryList& Target, const FColor& Value )
+{
+	Target.RemoveColor( Value );
+	return Target;
+}
+
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_RemoveLinearColor( FJsonLibraryList& Target, const FLinearColor& Value )
+{
+	Target.RemoveLinearColor( Value );
+	return Target;
+}
+
 FJsonLibraryList& UJsonLibraryHelpers::JsonList_RemoveRotator( FJsonLibraryList& Target, const FRotator& Value )
 {
 	Target.RemoveRotator( Value );
@@ -1203,6 +1613,26 @@ int32 UJsonLibraryHelpers::JsonList_FindString( const FJsonLibraryList& Target, 
 	return Target.FindString( Value, Index );
 }
 
+int32 UJsonLibraryHelpers::JsonList_FindDateTime( const FJsonLibraryList& Target, const FDateTime& Value, int32 Index /*= 0*/ )
+{
+	return Target.FindDateTime( Value, Index );
+}
+
+int32 UJsonLibraryHelpers::JsonList_FindGuid( const FJsonLibraryList& Target, const FGuid& Value, int32 Index /*= 0*/ )
+{
+	return Target.FindGuid( Value, Index );
+}
+
+int32 UJsonLibraryHelpers::JsonList_FindColor( const FJsonLibraryList& Target, const FColor& Value, int32 Index /*= 0*/ )
+{
+	return Target.FindColor( Value, Index );
+}
+
+int32 UJsonLibraryHelpers::JsonList_FindLinearColor( const FJsonLibraryList& Target, const FLinearColor& Value, int32 Index /*= 0*/ )
+{
+	return Target.FindLinearColor( Value, Index );
+}
+
 int32 UJsonLibraryHelpers::JsonList_FindRotator( const FJsonLibraryList& Target, const FRotator& Value, int32 Index /*= 0*/ )
 {
 	return Target.FindRotator( Value, Index );
@@ -1243,7 +1673,123 @@ bool UJsonLibraryHelpers::JsonList_IsEmpty( const FJsonLibraryList& Target )
 	return Target.IsEmpty();
 }
 
-FString UJsonLibraryHelpers::JsonList_Stringify( const FJsonLibraryList& Target )
+FString UJsonLibraryHelpers::JsonList_Stringify( const FJsonLibraryList& Target, bool bCondensed /*= true*/ )
 {
-	return Target.Stringify();
+	return Target.Stringify( bCondensed );
+}
+
+FString UJsonLibraryHelpers::StripCommentsOrCommas( const FString& Text, bool bComments /*= true*/, bool bTrailingCommas /*= true*/ )
+{
+	if ( !bComments && !bTrailingCommas )
+		return Text;
+
+	int32 BlockComment  = -1;
+	int32 LineComment   = -1;
+	int32 TrailingComma = -1;
+
+	bool bStringLiteral   = false;
+	bool bEscapeCharacter = false;
+
+	int32 Length = Text.Len();
+	FString StrippedText = Text;
+	for ( int32 Index = 0; Index < Length; Index++ )
+	{
+		auto StrippedCharacter = StrippedText[ Index ];
+		if ( BlockComment >= 0 )
+		{
+			if ( StrippedCharacter == '*' && Index + 1 < Length && StrippedText[ Index + 1 ] == '/' )
+			{
+				if ( bComments )
+				{
+					StrippedText = Index + 2 < Length ?
+								   StrippedText.Left( BlockComment ) + StrippedText.RightChop( Index + 2 ) :
+								   StrippedText.Left( BlockComment );
+
+					int32 CommentLength = Index + 2 - BlockComment;
+					Length -= CommentLength;
+					Index  -= CommentLength - 1;
+				}
+
+				BlockComment = -1;
+			}
+
+			continue;
+		}
+		else if ( LineComment >= 0 )
+		{
+			if ( StrippedCharacter == '\r' || StrippedCharacter == '\n' )
+			{
+				if ( bComments )
+				{
+					StrippedText = StrippedText.Left( LineComment ) + StrippedText.RightChop( Index );
+				
+					int32 CommentLength = Index - LineComment;
+					Length -= CommentLength;
+					Index  -= CommentLength;
+				}
+
+				LineComment = -1;
+			}
+
+			continue;
+		}
+		else if ( !bStringLiteral && StrippedCharacter == '/' && Index + 1 < Length )
+		{
+			if ( StrippedText[ Index + 1 ] == '*' )
+			{
+				BlockComment = Index;
+				++Index;
+			}
+			else if ( StrippedText[ Index + 1 ] == '/' )
+			{
+				LineComment = Index;
+				++Index;
+			}
+			else
+				TrailingComma = -1;
+			
+			bEscapeCharacter = false;
+			continue;
+		}
+		else if ( !bStringLiteral && TrailingComma >= 0 && ( StrippedCharacter == '}'
+														  || StrippedCharacter == ']' ) )
+		{
+			if ( bTrailingCommas )
+			{
+				StrippedText = StrippedText.Left( TrailingComma ) + StrippedText.RightChop( TrailingComma + 1 );
+				
+				Length -= 1;
+				Index  -= 1;
+			}
+
+			TrailingComma    = -1;
+			bEscapeCharacter = false;
+			continue;
+		}
+
+		if ( bStringLiteral )
+			TrailingComma = -1;
+		else if ( StrippedCharacter == ',' )
+			TrailingComma = Index;
+		else if ( !FChar::IsWhitespace( StrippedCharacter ) && StrippedCharacter != '\r'
+															&& StrippedCharacter != '\n')
+			TrailingComma = -1;
+		
+		if ( !bEscapeCharacter )
+		{
+			if ( StrippedCharacter == '"' )
+				bStringLiteral = !bStringLiteral;
+			else if ( StrippedCharacter == '\\' )
+				bEscapeCharacter = true;
+		}
+		else
+			bEscapeCharacter = false;
+	}
+
+	if ( BlockComment >= 0 )
+		StrippedText = StrippedText.Left( BlockComment );
+	else if ( LineComment >= 0 )
+		StrippedText = StrippedText.Left( LineComment );
+	
+	return StrippedText;
 }

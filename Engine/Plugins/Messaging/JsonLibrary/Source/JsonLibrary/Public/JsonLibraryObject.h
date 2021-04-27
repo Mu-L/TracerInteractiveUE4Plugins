@@ -1,10 +1,11 @@
-// Copyright 2020 Tracer Interactive, LLC. All Rights Reserved.
+// Copyright 2021 Tracer Interactive, LLC. All Rights Reserved.
 #pragma once
 #include "Dom/JsonValue.h"
 #include "Dom/JsonObject.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonTypes.h"
+#include "UObject/StructOnScope.h"
 #include "JsonLibraryEnums.h"
 #include "JsonLibraryValue.h"
 #include "JsonLibraryObject.generated.h"
@@ -19,6 +20,8 @@ struct JSONLIBRARY_API FJsonLibraryObject
 	friend struct FJsonLibraryList;
 	friend struct FJsonLibraryValue;
 
+	friend class UJsonLibraryBlueprintHelpers;
+
 	GENERATED_USTRUCT_BODY()
 
 protected:
@@ -26,10 +29,22 @@ protected:
 	FJsonLibraryObject( const TSharedPtr<FJsonValue>& Value );
 	FJsonLibraryObject( const TSharedPtr<FJsonValueObject>& Value );
 
+	FJsonLibraryObject( const UStruct* StructType, const void* StructPtr );
+
 public:
+
+	FJsonLibraryObject( const TSharedPtr<FStructOnScope>& StructData );
+	
+	template<typename StructType>
+	FJsonLibraryObject( const StructType& Struct )
+		: FJsonLibraryObject( StructType::StaticStruct(), &Struct )
+	{
+	}
 
 	FJsonLibraryObject();
 	FJsonLibraryObject( const FJsonLibraryObjectNotify& Notify );
+
+	FJsonLibraryObject( const FLinearColor& Value );
 
 	FJsonLibraryObject( const FRotator& Value );
 	FJsonLibraryObject( const FTransform& Value );
@@ -41,6 +56,12 @@ public:
 	FJsonLibraryObject( const TMap<FString, double>& Value );
 	FJsonLibraryObject( const TMap<FString, int32>& Value );
 	FJsonLibraryObject( const TMap<FString, FString>& Value );
+
+	FJsonLibraryObject( const TMap<FString, FDateTime>& Value );
+	FJsonLibraryObject( const TMap<FString, FGuid>& Value );
+
+	FJsonLibraryObject( const TMap<FString, FColor>& Value );
+	FJsonLibraryObject( const TMap<FString, FLinearColor>& Value );
 
 	FJsonLibraryObject( const TMap<FString, FRotator>& Value );
 	FJsonLibraryObject( const TMap<FString, FTransform>& Value );
@@ -73,6 +94,16 @@ public:
 	// Add a map of strings to this object.
 	void AddStringMap( const TMap<FString, FString>& Map );
 
+	// Add a map of date/times to this object.
+	void AddDateTimeMap( const TMap<FString, FDateTime>& Map );
+	// Add a map of GUIDs to this object.
+	void AddGuidMap( const TMap<FString, FGuid>& Map );
+
+	// Add a map of colors to this object.
+	void AddColorMap( const TMap<FString, FColor>& Map );
+	// Add a map of linear colors to this object.
+	void AddLinearColorMap( const TMap<FString, FLinearColor>& Map );
+
 	// Add a map of rotators to this object.
 	void AddRotatorMap( const TMap<FString, FRotator>& Map );
 	// Add a map of transforms to this object.
@@ -95,6 +126,16 @@ public:
 	double GetNumber( const FString& Key ) const;
 	// Get a property as a string.
 	FString GetString( const FString& Key ) const;
+
+	// Get a property as a date/time.
+	FDateTime GetDateTime( const FString& Key ) const;
+	// Get a property as a GUID.
+	FGuid GetGuid( const FString& Key ) const;
+
+	// Get a property as a color.
+	FColor GetColor( const FString& Key ) const;
+	// Get a property as a linear color.
+	FLinearColor GetLinearColor( const FString& Key ) const;
 
 	// Get a property as a rotator.
 	FRotator GetRotator( const FString& Key ) const;
@@ -126,6 +167,16 @@ public:
 	// Set a property as a string.
 	void SetString( const FString& Key, const FString& Value );
 
+	// Set a property as a date/time.
+	void SetDateTime( const FString& Key, const FDateTime& Value );
+	// Set a property as a GUID.
+	void SetGuid( const FString& Key, const FGuid& Value );
+
+	// Set a property as a color.
+	void SetColor( const FString& Key, const FColor& Value );
+	// Set a property as a linear color.
+	void SetLinearColor( const FString& Key, const FLinearColor& Value );
+
 	// Set a property as a rotator.
 	void SetRotator( const FString& Key, const FRotator& Value );
 	// Set a property as a transform.
@@ -152,7 +203,7 @@ protected:
 	const TSharedPtr<FJsonObject> GetJsonObject() const;
 	TSharedPtr<FJsonObject> SetJsonObject();
 
-	bool TryParse( const FString& Text );
+	bool TryParse( const FString& Text, bool bStripComments = false, bool bStripTrailingCommas = false );
 	bool TryStringify( FString& Text, bool bCondensed = true ) const;
 
 private:
@@ -176,6 +227,9 @@ public:
 	// Check if this object is empty.
 	bool IsEmpty() const;
 
+	// Check if this object is a linear color.
+	bool IsLinearColor() const;
+
 	// Check if this object is a rotator.
 	bool IsRotator() const;
 	// Check if this object is a transform.
@@ -187,9 +241,35 @@ public:
 	static FJsonLibraryObject Parse( const FString& Text );
 	// Parse a JSON string.
 	static FJsonLibraryObject Parse( const FString& Text, const FJsonLibraryObjectNotify& Notify );
+	
+	// Parse a relaxed JSON string.
+	static FJsonLibraryObject ParseRelaxed( const FString& Text, bool bStripComments = true, bool bStripTrailingCommas = true );
 
 	// Stringify this object as a JSON string.
-	FString Stringify() const;
+	FString Stringify( bool bCondensed = true ) const;
+
+protected:
+	
+	bool ToStruct( const UStruct* StructType, void* StructPtr ) const;
+
+public:
+
+	// Convert this object to structure memory.
+	TSharedPtr<FStructOnScope> ToStruct( const UStruct* StructType ) const;
+
+	// Convert this object to a structure.
+	template<typename StructType>
+	StructType ToStruct() const
+	{
+		StructType Struct;
+		if ( ToStruct( StructType::StaticStruct(), &Struct ) )
+			return Struct;
+		
+		return StructType();
+	}
+
+	// Convert this object to a linear color.
+	FLinearColor ToLinearColor() const;
 
 	// Convert this object to a rotator.
 	FRotator ToRotator() const;
@@ -211,6 +291,16 @@ public:
 	TMap<FString, double> ToNumberMap() const;
 	// Copy a JSON object to a map of strings.
 	TMap<FString, FString> ToStringMap() const;
+
+	// Copy a JSON object to a map of date/times.
+	TMap<FString, FDateTime> ToDateTimeMap() const;
+	// Copy a JSON object to a map of GUIDs.
+	TMap<FString, FGuid> ToGuidMap() const;
+
+	// Copy a JSON object to a map of colors.
+	TMap<FString, FColor> ToColorMap() const;
+	// Copy a JSON object to a map of linear colors.
+	TMap<FString, FLinearColor> ToLinearColorMap() const;
 
 	// Copy a JSON object to a map of rotators.
 	TMap<FString, FRotator> ToRotatorMap() const;

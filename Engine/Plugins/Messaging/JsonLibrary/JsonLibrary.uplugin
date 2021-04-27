@@ -6,8 +6,8 @@
 	"Description": "Manage objects, arrays, and primitive data types using JSON.",
 	"Category": "Messaging",
 	"CreatedBy": "Tracer Interactive",
-	"CreatedByURL": "http://tracerinteractive.com",
-	"DocsURL": "http://cdn.tracerinteractive.com/jsonlibrary/documentation.pdf",
+	"CreatedByURL": "https://tracerinteractive.com",
+	"DocsURL": "https://cdn.tracerinteractive.com/jsonlibrary/documentation.pdf",
 	"MarketplaceURL": "",
 	"SupportURL": "",
 	"EngineVersion": "4.24.0",
@@ -25,6 +25,16 @@
 				"Linux",
 				"Android",
 				"IOS"
+			]
+		},
+		{
+			"Name": "JsonLibraryBlueprintSupport",
+			"Type": "UncookedOnly",
+			"LoadingPhase": "PostConfigInit",
+			"WhitelistPlatforms": [
+				"Win64",
+				"Mac",
+				"Linux"
 			]
 		}
 	]

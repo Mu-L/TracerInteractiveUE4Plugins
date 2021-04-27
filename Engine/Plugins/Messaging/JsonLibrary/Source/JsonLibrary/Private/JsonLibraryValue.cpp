@@ -1,4 +1,4 @@
-// Copyright 2020 Tracer Interactive, LLC. All Rights Reserved.
+// Copyright 2021 Tracer Interactive, LLC. All Rights Reserved.
 #include "JsonLibraryValue.h"
 #include "JsonLibraryObject.h"
 #include "JsonLibraryList.h"
@@ -83,6 +83,29 @@ FJsonLibraryValue::FJsonLibraryValue( uint64 Value )
 FJsonLibraryValue::FJsonLibraryValue( const FString& Value )
 {
 	JsonValue = MakeShareable( new FJsonValueString( Value ) );
+}
+
+FJsonLibraryValue::FJsonLibraryValue( const FDateTime& Value )
+	: FJsonLibraryValue( Value.ToIso8601() )
+{
+	//
+}
+
+FJsonLibraryValue::FJsonLibraryValue( const FGuid& Value )
+	: FJsonLibraryValue( Value.ToString( EGuidFormats::DigitsWithHyphens ) )
+{
+	//
+}
+
+FJsonLibraryValue::FJsonLibraryValue( const FColor& Value )
+	: FJsonLibraryValue( "#" + Value.ToHex() )
+{
+	//
+}
+
+FJsonLibraryValue::FJsonLibraryValue( const FLinearColor& Value )
+{
+	JsonValue = FJsonLibraryObject( Value ).JsonObject;
 }
 
 FJsonLibraryValue::FJsonLibraryValue( const FRotator& Value )
@@ -300,6 +323,49 @@ FString FJsonLibraryValue::GetString() const
 	return FString();
 }
 
+FDateTime FJsonLibraryValue::GetDateTime() const
+{
+	if ( !JsonValue.IsValid() || JsonValue->Type != EJson::String )
+		return FDateTime();
+
+	FDateTime DateTime;
+	if ( FDateTime::ParseIso8601( *JsonValue->AsString(), DateTime ) )
+		return DateTime;
+	
+	return FDateTime();
+}
+
+FGuid FJsonLibraryValue::GetGuid() const
+{
+	if ( !JsonValue.IsValid() || JsonValue->Type != EJson::String )
+		return FGuid();
+
+	FGuid Guid;
+	if ( FGuid::Parse( JsonValue->AsString(), Guid ) )
+		return Guid;
+	
+	return FGuid();
+}
+
+FColor FJsonLibraryValue::GetColor() const
+{
+	if ( !JsonValue.IsValid() || JsonValue->Type != EJson::String )
+		return FColor();
+
+	if ( IsColor() )
+		return FColor::FromHex( JsonValue->AsString() );
+
+	return FColor();
+}
+
+FLinearColor FJsonLibraryValue::GetLinearColor() const
+{
+	if ( GetType() == EJsonLibraryType::Object )
+		return GetObject().ToLinearColor();
+	
+	return FLinearColor();
+}
+
 FRotator FJsonLibraryValue::GetRotator() const
 {
 	if ( GetType() == EJsonLibraryType::Object )
@@ -374,7 +440,7 @@ uint64 FJsonLibraryValue::GetUInt64() const
 	return (uint64)GetNumber();
 }
 
-bool FJsonLibraryValue::TryParse( const FString& Text )
+bool FJsonLibraryValue::TryParse( const FString& Text, bool bStripComments /*= false*/, bool bStripTrailingCommas /*= false*/ )
 {
 	if ( Text.IsEmpty() )
 		return false;
@@ -382,6 +448,9 @@ bool FJsonLibraryValue::TryParse( const FString& Text )
 	FString TrimmedText = Text;
 	TrimmedText.TrimStartInline();
 	TrimmedText.TrimEndInline();
+
+	if ( bStripComments || bStripTrailingCommas )
+		TrimmedText = UJsonLibraryHelpers::StripCommentsOrCommas( TrimmedText, bStripComments, bStripTrailingCommas );
 
 	if ( ( TrimmedText.StartsWith( "{" ) && TrimmedText.EndsWith( "}" ) )
 	  || ( TrimmedText.StartsWith( "[" ) && TrimmedText.EndsWith( "]" ) ) )
@@ -507,6 +576,75 @@ bool FJsonLibraryValue::IsValid() const
 	return GetType() != EJsonLibraryType::Invalid;
 }
 
+bool FJsonLibraryValue::IsDateTime() const
+{
+	if ( !JsonValue.IsValid() || JsonValue->Type != EJson::String )
+		return false;
+
+	FDateTime DateTime;
+	return FDateTime::ParseIso8601( *JsonValue->AsString(), DateTime );
+}
+
+bool FJsonLibraryValue::IsGuid() const
+{
+	if ( !JsonValue.IsValid() || JsonValue->Type != EJson::String )
+		return false;
+
+	FGuid Guid;
+	if ( FGuid::Parse( JsonValue->AsString(), Guid ) )
+		return Guid.IsValid();
+
+	return false;
+}
+
+bool FJsonLibraryValue::IsColor() const
+{
+	if ( !JsonValue.IsValid() || JsonValue->Type != EJson::String )
+		return false;
+	
+	FString HexString = JsonValue->AsString();
+	if ( HexString.IsEmpty() )
+		return false;
+
+	int32 StartIndex = HexString[ 0 ] == TCHAR( '#' ) ? 1 : 0;
+	if ( HexString.Len() == 3 + StartIndex )
+	{
+		for ( int32 i = 0; i < 3; i++ )
+			if ( !FChar::IsHexDigit( HexString[ StartIndex++ ] ) )
+				return false;
+
+		return true;
+	}
+
+	if ( HexString.Len() == 6 + StartIndex )
+	{
+		for ( int32 i = 0; i < 6; i++ )
+			if ( !FChar::IsHexDigit( HexString[ StartIndex++ ] ) )
+				return false;
+
+		return true;
+	}
+
+	if ( HexString.Len() == 8 + StartIndex )
+	{
+		for ( int32 i = 0; i < 8; i++ )
+			if ( !FChar::IsHexDigit( HexString[ StartIndex++ ] ) )
+				return false;
+
+		return true;
+	}
+
+	return false;
+}
+
+bool FJsonLibraryValue::IsLinearColor() const
+{
+	if ( GetType() == EJsonLibraryType::Object )
+		return GetObject().IsLinearColor();
+
+	return false;
+}
+
 bool FJsonLibraryValue::IsRotator() const
 {
 	if ( GetType() == EJsonLibraryType::Object )
@@ -540,10 +678,19 @@ FJsonLibraryValue FJsonLibraryValue::Parse( const FString& Text )
 	return Value;
 }
 
-FString FJsonLibraryValue::Stringify() const
+FJsonLibraryValue FJsonLibraryValue::ParseRelaxed( const FString& Text, bool bStripComments /*= true*/, bool bStripTrailingCommas /*= true*/ )
+{
+	FJsonLibraryValue Value = TSharedPtr<FJsonValue>();
+	if ( !Value.TryParse( Text, bStripComments, bStripTrailingCommas ) )
+		Value.JsonValue.Reset();
+	
+	return Value;
+}
+
+FString FJsonLibraryValue::Stringify( bool bCondensed /*= true*/ ) const
 {
 	FString Text;
-	if ( TryStringify( Text ) )
+	if ( TryStringify( Text, bCondensed ) )
 		return Text;
 
 	return FString();

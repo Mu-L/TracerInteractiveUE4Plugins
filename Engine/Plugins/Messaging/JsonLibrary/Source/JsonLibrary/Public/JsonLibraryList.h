@@ -1,4 +1,4 @@
-// Copyright 2020 Tracer Interactive, LLC. All Rights Reserved.
+// Copyright 2021 Tracer Interactive, LLC. All Rights Reserved.
 #pragma once
 #include "Dom/JsonValue.h"
 #include "Dom/JsonObject.h"
@@ -38,6 +38,12 @@ public:
 	FJsonLibraryList( const TArray<int32>& Value );
 	FJsonLibraryList( const TArray<FString>& Value );
 
+	FJsonLibraryList( const TArray<FDateTime>& Value );
+	FJsonLibraryList( const TArray<FGuid>& Value );
+
+	FJsonLibraryList( const TArray<FColor>& Value );
+	FJsonLibraryList( const TArray<FLinearColor>& Value );
+
 	FJsonLibraryList( const TArray<FRotator>& Value );
 	FJsonLibraryList( const TArray<FTransform>& Value );
 	FJsonLibraryList( const TArray<FVector>& Value );
@@ -67,8 +73,19 @@ public:
 	void AppendNumberArray( const TArray<double>& Array );
 	// Append an array of strings to this list.
 	void AppendStringArray( const TArray<FString>& Array );
+
 	// Append an array of JSON objects to this list.
 	void AppendObjectArray( const TArray<FJsonLibraryObject>& Array );
+
+	// Append an array of date/times to this list.
+	void AppendDateTimeArray( const TArray<FDateTime>& Array );
+	// Append an array of GUIDs to this list.
+	void AppendGuidArray( const TArray<FGuid>& Array );
+
+	// Append an array of colors to this list.
+	void AppendColorArray( const TArray<FColor>& Array );
+	// Append an array of linear colors to this list.
+	void AppendLinearColorArray( const TArray<FLinearColor>& Array );
 
 	// Append an array of rotators to this list.
 	void AppendRotatorArray( const TArray<FRotator>& Array );
@@ -90,8 +107,19 @@ public:
 	void InjectNumberArray( int32 Index, const TArray<double>& Array );
 	// Inject the items of a string array into this list.
 	void InjectStringArray( int32 Index, const TArray<FString>& Array );
+
 	// Inject the items of an array of JSON objects into this list.
 	void InjectObjectArray( int32 Index, const TArray<FJsonLibraryObject>& Array );
+
+	// Inject the items of a date/time array into this list.
+	void InjectDateTimeArray( int32 Index, const TArray<FDateTime>& Array );
+	// Inject the items of a GUID array into this list.
+	void InjectGuidArray( int32 Index, const TArray<FGuid>& Array );
+
+	// Inject the items of a color array into this list.
+	void InjectColorArray( int32 Index, const TArray<FColor>& Array );
+	// Inject the items of a linear color array into this list.
+	void InjectLinearColorArray( int32 Index, const TArray<FLinearColor>& Array );
 
 	// Inject the items of a rotator array into this list.
 	void InjectRotatorArray( int32 Index, const TArray<FRotator>& Array );
@@ -110,6 +138,16 @@ public:
 	void AddNumber( double Value );
 	// Add a string to this list.
 	void AddString( const FString& Value );
+
+	// Add a date/time to this list.
+	void AddDateTime( const FDateTime& Value );
+	// Add a GUID to this list.
+	void AddGuid( const FGuid& Value );
+
+	// Add a color to this list.
+	void AddColor( const FColor& Value );
+	// Add a linear color to this list.
+	void AddLinearColor( const FLinearColor& Value );
 
 	// Add a rotator to this list.
 	void AddRotator( const FRotator& Value );
@@ -141,6 +179,16 @@ public:
 	// Insert a string into this list.
 	void InsertString( int32 Index, const FString& Value );
 
+	// Insert a date/time into this list.
+	void InsertDateTime( int32 Index, const FDateTime& Value );
+	// Insert a GUID into this list.
+	void InsertGuid( int32 Index, const FGuid& Value );
+
+	// Insert a color into this list.
+	void InsertColor( int32 Index, const FColor& Value );
+	// Insert a linear color into this list.
+	void InsertLinearColor( int32 Index, const FLinearColor& Value );
+
 	// Insert a rotator into this list.
 	void InsertRotator( int32 Index, const FRotator& Value );
 	// Insert a transform into this list.
@@ -171,6 +219,16 @@ public:
 	// Get an item as a string.
 	FString GetString( int32 Index ) const;
 
+	// Get an item as a date/time.
+	FDateTime GetDateTime( int32 Index ) const;
+	// Get an item as a GUID.
+	FGuid GetGuid( int32 Index ) const;
+
+	// Get an item as a color.
+	FColor GetColor( int32 Index ) const;
+	// Get an item as a linear color.
+	FLinearColor GetLinearColor( int32 Index ) const;
+
 	// Get an item as a rotator.
 	FRotator GetRotator( int32 Index ) const;
 	// Get an item as a transform.
@@ -200,6 +258,16 @@ public:
 	void SetNumber( int32 Index, double Value );
 	// Set an item as a string.
 	void SetString( int32 Index, const FString& Value );
+
+	// Set an item as a date/time.
+	void SetDateTime( int32 Index, const FDateTime& Value );
+	// Set an item as a GUID.
+	void SetGuid( int32 Index, const FGuid& Value );
+
+	// Set an item as a color.
+	void SetColor( int32 Index, const FColor& Value );
+	// Set an item as a linear color.
+	void SetLinearColor( int32 Index, const FLinearColor& Value );
 
 	// Set an item as a rotator.
 	void SetRotator( int32 Index, const FRotator& Value );
@@ -234,6 +302,16 @@ public:
 	// Remove a string from this list.
 	void RemoveString( const FString& Value );
 
+	// Remove a date/time from this list.
+	void RemoveDateTime( const FDateTime& Value );
+	// Remove a GUID from this list.
+	void RemoveGuid( const FGuid& Value );
+
+	// Remove a color from this list.
+	void RemoveColor( const FColor& Value );
+	// Remove a linear color from this list.
+	void RemoveLinearColor( const FLinearColor& Value );
+
 	// Remove a rotator from this list.
 	void RemoveRotator( const FRotator& Value );
 	// Remove a transform from this list.
@@ -259,6 +337,16 @@ public:
 	// Find a string in this list.
 	int32 FindString( const FString& Value, int32 Index = 0 ) const;
 
+	// Find a date/time in this list.
+	int32 FindDateTime( const FDateTime& Value, int32 Index = 0 ) const;
+	// Find a GUID in this list.
+	int32 FindGuid( const FGuid& Value, int32 Index = 0 ) const;
+
+	// Find a color in this list.
+	int32 FindColor( const FColor& Value, int32 Index = 0 ) const;
+	// Find a linear color in this list.
+	int32 FindLinearColor( const FLinearColor& Value, int32 Index = 0 ) const;
+
 	// Find a rotator in this list.
 	int32 FindRotator( const FRotator& Value, int32 Index = 0 ) const;
 	// Find a transform in this list.
@@ -280,7 +368,7 @@ protected:
 	const TArray<TSharedPtr<FJsonValue>>* GetJsonArray() const;
 	TArray<TSharedPtr<FJsonValue>>* SetJsonArray();
 
-	bool TryParse( const FString& Text );
+	bool TryParse( const FString& Text, bool bStripComments = false, bool bStripTrailingCommas = false );
 	bool TryStringify( FString& Text, bool bCondensed = true ) const;
 
 private:
@@ -310,8 +398,11 @@ public:
 	// Parse a JSON string.
 	static FJsonLibraryList Parse( const FString& Text, const FJsonLibraryListNotify& Notify );
 
+	// Parse a relaxed JSON string.
+	static FJsonLibraryList ParseRelaxed( const FString& Text, bool bStripComments = true, bool bStripTrailingCommas = true );
+
 	// Stringify this list as a JSON string.
-	FString Stringify() const;
+	FString Stringify( bool bCondensed = true ) const;
 
 	// Copy this list to an array of JSON values.
 	TArray<FJsonLibraryValue> ToArray() const;
@@ -326,6 +417,16 @@ public:
 	TArray<double> ToNumberArray() const;
 	// Copy this list to an array of strings.
 	TArray<FString> ToStringArray() const;
+
+	// Copy this list to an array of date/times.
+	TArray<FDateTime> ToDateTimeArray() const;
+	// Copy this list to an array of GUIDs.
+	TArray<FGuid> ToGuidArray() const;
+
+	// Copy this list to an array of colors.
+	TArray<FColor> ToColorArray() const;
+	// Copy this list to an array of linear colors.
+	TArray<FLinearColor> ToLinearColorArray() const;
 
 	// Copy this list to an array of rotators.
 	TArray<FRotator> ToRotatorArray() const;
