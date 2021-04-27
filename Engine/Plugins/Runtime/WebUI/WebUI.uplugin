@@ -3,7 +3,7 @@
 	"Version": 1,
 	"VersionName": "1.0",
 	"FriendlyName": "Web UI",
-	"Description": "Create a web-based user interface using the Chromium Embedded Framework.",
+	"Description": "Create a web-based user interface using blueprints.",
 	"Category": "Widgets",
 	"CreatedBy": "Tracer Interactive",
 	"CreatedByURL": "https://tracerinteractive.com",
