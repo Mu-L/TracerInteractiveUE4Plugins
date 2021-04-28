@@ -1,11 +1,12 @@
-// Copyright 2020 Tracer Interactive, LLC. All Rights Reserved.
+// Copyright 2021 Tracer Interactive, LLC. All Rights Reserved.
 #include "SWebInterface.h"
 #if !UE_SERVER
-#include "SWebBrowser.h"
-#include "WebBrowserModule.h"
-#include "IWebBrowserPopupFeatures.h"
-#include "IWebBrowserSingleton.h"
-#include "IWebBrowserWindow.h"
+#include "SWebInterfaceBrowser.h"
+#include "WebInterfaceBrowserModule.h"
+#include "WebInterfaceSchemeHandler.h"
+#include "IWebInterfaceBrowserPopupFeatures.h"
+#include "IWebInterfaceBrowserSingleton.h"
+#include "IWebInterfaceBrowserWindow.h"
 #include "RenderUtils.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Input/Events.h"
@@ -27,11 +28,11 @@ SWebInterface::SWebInterface()
 SWebInterface::~SWebInterface()
 {
 #if UE_BUILD_DEVELOPMENT || UE_BUILD_DEBUG
-	for ( TPair<TWeakPtr<IWebBrowserWindow>, TWeakPtr<SWindow>> Temp : BrowserWindowWidgets )
+	for ( TPair<TWeakPtr<IWebInterfaceBrowserWindow>, TWeakPtr<SWindow>> Temp : BrowserWindowWidgets )
 	{
 		if ( Temp.Key.IsValid() )
 		{
-			TSharedPtr<IWebBrowserWindow> WebBrowserWindow = Temp.Key.Pin();
+			TSharedPtr<IWebInterfaceBrowserWindow> WebBrowserWindow = Temp.Key.Pin();
 			if ( WebBrowserWindow.IsValid() )
 				WebBrowserWindow->CloseBrowser( false );
 		}
@@ -46,6 +47,7 @@ SWebInterface::~SWebInterface()
 #endif
 }
 
+bool SWebInterface::bPAK = false;
 void SWebInterface::Construct( const FArguments& InArgs )
 {
 	OnLoadCompleted     = InArgs._OnLoadCompleted;
@@ -70,22 +72,28 @@ void SWebInterface::Construct( const FArguments& InArgs )
 	FCreateBrowserWindowSettings Settings;
 	Settings.BrowserFrameRate  = FMath::Clamp( InArgs._FrameRate, 1, 60 );
 	Settings.bUseTransparency  = true;
+	Settings.bUseNativeCursors = InArgs._NativeCursors;
 	Settings.BackgroundColor   = InArgs._BackgroundColor;
 	Settings.InitialURL        = InArgs._InitialURL;
 	Settings.ContentsToLoad    = InArgs._ContentsToLoad;
 	Settings.bShowErrorMessage = UE_BUILD_DEVELOPMENT || UE_BUILD_DEBUG;
 	Settings.bThumbMouseButtonNavigation = false;
 
-	IWebBrowserSingleton* Singleton = IWebBrowserModule::Get().GetSingleton();
+	IWebInterfaceBrowserSingleton* Singleton = IWebInterfaceBrowserModule::Get().GetSingleton();
 	if ( Singleton )
 	{
-		Singleton->SetDevToolsShortcutEnabled( Settings.bShowErrorMessage );
+		if ( !bPAK )
+		{
+			bPAK = Singleton->RegisterSchemeHandlerFactory( "pak", FString(), new FWebInterfaceSchemeHandlerFactory() );
+			Singleton->SetDevToolsShortcutEnabled( Settings.bShowErrorMessage );
+		}
+
 		BrowserWindow = Singleton->CreateBrowserWindow( Settings );
 	}
 
 	ChildSlot
 	[
-		SAssignNew( BrowserView, SWebBrowserView, BrowserWindow )
+		SAssignNew( BrowserView, SWebInterfaceBrowserView, BrowserWindow )
 		.ParentWindow( InArgs._ParentWindow )
 		.InitialURL( InArgs._InitialURL )
 		.ContentsToLoad( InArgs._ContentsToLoad )
@@ -188,13 +196,13 @@ bool SWebInterface::HandleSuppressContextMenu()
 	return true;
 }
 
-bool SWebInterface::HandleCreateWindow( const TWeakPtr<IWebBrowserWindow>& NewBrowserWindow, const TWeakPtr<IWebBrowserPopupFeatures>& PopupFeatures )
+bool SWebInterface::HandleCreateWindow( const TWeakPtr<IWebInterfaceBrowserWindow>& NewBrowserWindow, const TWeakPtr<IWebInterfaceBrowserPopupFeatures>& PopupFeatures )
 {
 #if UE_BUILD_DEVELOPMENT || UE_BUILD_DEBUG
 	if ( !PopupFeatures.IsValid() )
 		return false;
 
-	TSharedPtr<IWebBrowserPopupFeatures> PopupFeaturesSP = PopupFeatures.Pin();
+	TSharedPtr<IWebInterfaceBrowserPopupFeatures> PopupFeaturesSP = PopupFeatures.Pin();
 	if ( !PopupFeaturesSP.IsValid() )
 		return false;
 	
@@ -214,7 +222,7 @@ bool SWebInterface::HandleCreateWindow( const TWeakPtr<IWebBrowserWindow>& NewBr
 								   ESizingRule::UserSized :
 								   ESizingRule::FixedSize;
 
-	TSharedPtr<IWebBrowserWindow> NewBrowserWindowSP = NewBrowserWindow.Pin();
+	TSharedPtr<IWebInterfaceBrowserWindow> NewBrowserWindowSP = NewBrowserWindow.Pin();
 	if ( !NewBrowserWindowSP.IsValid() )
 		return false;
 
@@ -232,14 +240,14 @@ bool SWebInterface::HandleCreateWindow( const TWeakPtr<IWebBrowserWindow>& NewBr
 		.IsInitiallyMaximized( PopupFeaturesSP->IsFullscreen() )
 		.LayoutBorder( FMargin( 0 ) );
 
-	TSharedPtr<SWebBrowser> WebBrowser;
+	TSharedPtr<SWebInterfaceBrowser> WebBrowser;
 	NewWindow->SetContent(
 		SNew( SBorder )
 		.VAlign( VAlign_Fill )
 		.HAlign( HAlign_Fill )
 		.Padding( 0 )
 		[
-			SAssignNew( WebBrowser, SWebBrowser, NewBrowserWindowSP )
+			SAssignNew( WebBrowser, SWebInterfaceBrowser, NewBrowserWindowSP )
 				.ShowControls( false )
 				.ShowAddressBar( false )
 				.OnCreateWindow( this, &SWebInterface::HandleCreateWindow )
@@ -249,9 +257,9 @@ bool SWebInterface::HandleCreateWindow( const TWeakPtr<IWebBrowserWindow>& NewBr
 	{
 		struct FLocal
 		{
-			static void RequestDestroyWindowOverride( const TSharedRef<SWindow>& Window, TWeakPtr<IWebBrowserWindow> BrowserWindowPtr )
+			static void RequestDestroyWindowOverride( const TSharedRef<SWindow>& Window, TWeakPtr<IWebInterfaceBrowserWindow> BrowserWindowPtr )
 			{
-				TSharedPtr<IWebBrowserWindow> BrowserWindow = BrowserWindowPtr.Pin();
+				TSharedPtr<IWebInterfaceBrowserWindow> BrowserWindow = BrowserWindowPtr.Pin();
 				if ( BrowserWindow.IsValid() )
 				{
 					if ( BrowserWindow->IsClosing() )
@@ -262,7 +270,7 @@ bool SWebInterface::HandleCreateWindow( const TWeakPtr<IWebBrowserWindow>& NewBr
 			}
 		};
 
-		NewWindow->SetRequestDestroyWindowOverride( FRequestDestroyWindowOverride::CreateStatic( &FLocal::RequestDestroyWindowOverride, TWeakPtr<IWebBrowserWindow>( NewBrowserWindow ) ) );
+		NewWindow->SetRequestDestroyWindowOverride( FRequestDestroyWindowOverride::CreateStatic( &FLocal::RequestDestroyWindowOverride, TWeakPtr<IWebInterfaceBrowserWindow>( NewBrowserWindow ) ) );
 	}
 
 	FSlateApplication::Get().AddWindow( NewWindow );
@@ -276,13 +284,13 @@ bool SWebInterface::HandleCreateWindow( const TWeakPtr<IWebBrowserWindow>& NewBr
 #endif
 }
 
-bool SWebInterface::HandleCloseWindow( const TWeakPtr<IWebBrowserWindow>& BrowserWindowPtr )
+bool SWebInterface::HandleCloseWindow( const TWeakPtr<IWebInterfaceBrowserWindow>& BrowserWindowPtr )
 {
 #if UE_BUILD_DEVELOPMENT || UE_BUILD_DEBUG
 	if ( !BrowserWindowPtr.IsValid() )
 		return false;
 
-	TSharedPtr<IWebBrowserWindow> WebBrowserWindow = BrowserWindowPtr.Pin();
+	TSharedPtr<IWebInterfaceBrowserWindow> WebBrowserWindow = BrowserWindowPtr.Pin();
 	if ( !WebBrowserWindow.IsValid() )
 		return false;
 
@@ -486,5 +494,29 @@ void SWebInterface::UnbindUObject( const FString& Name, UObject* Object, bool bI
 {
 	if ( BrowserView.IsValid() )
 		BrowserView->UnbindUObject( Name, Object, bIsPermanent );
+}
+
+void SWebInterface::BindAdapter(const TSharedRef<IWebInterfaceBrowserAdapter>& Adapter)
+{
+	if (BrowserView.IsValid())
+		BrowserView->BindAdapter(Adapter);
+}
+
+void SWebInterface::UnbindAdapter(const TSharedRef<IWebInterfaceBrowserAdapter>& Adapter)
+{
+	if (BrowserView.IsValid())
+		BrowserView->UnbindAdapter(Adapter);
+}
+
+void SWebInterface::BindInputMethodSystem(ITextInputMethodSystem* TextInputMethodSystem)
+{
+	if (BrowserView.IsValid())
+		BrowserView->BindInputMethodSystem(TextInputMethodSystem);
+}
+
+void SWebInterface::UnbindInputMethodSystem()
+{
+	if (BrowserView.IsValid())
+		BrowserView->UnbindInputMethodSystem();
 }
 #endif

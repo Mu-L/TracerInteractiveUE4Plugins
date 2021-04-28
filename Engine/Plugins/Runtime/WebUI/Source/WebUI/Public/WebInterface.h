@@ -1,4 +1,4 @@
-// Copyright 2020 Tracer Interactive, LLC. All Rights Reserved.
+// Copyright 2021 Tracer Interactive, LLC. All Rights Reserved.
 #pragma once
 #include "Components/Widget.h"
 #include "Engine/EngineBaseTypes.h"
@@ -26,6 +26,9 @@ public:
 	DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams( FOnPopupEvent, const FString&, URL, const FString&, Frame );
 	DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams( FOnInterfaceEvent, const FName, Name, FJsonLibraryValue, Data, FWebInterfaceCallback, Callback );
 
+	// Load the browser.
+	UFUNCTION(BlueprintCallable, Category = "Web UI")
+	bool Load( const FString& File );
 	// Load HTML in the browser.
 	UFUNCTION(BlueprintCallable, Category = "Web UI")
 	void LoadHTML( const FString& HTML );
@@ -56,6 +59,13 @@ public:
 	// Unbind an object from ue.name in the browser context.
 	UFUNCTION(BlueprintCallable, Category = "Web UI")
 	void Unbind( const FString& Name, UObject* Object );
+	
+	// Enables input method editors for different languages.
+	UFUNCTION(BlueprintCallable, Category = "Web UI|Input")
+	void EnableIME();
+	// Disables input method editors for different languages.
+	UFUNCTION(BlueprintCallable, Category = "Web UI|Input")
+	void DisableIME();
 
 	// Set focus to the browser.
 	UFUNCTION(BlueprintCallable, meta = (AdvancedDisplay = "MouseLockMode"), Category = "Web UI|Helpers")
@@ -140,6 +150,9 @@ protected:
 	bool bEnableVirtualPointerTransparency;
 	UPROPERTY(EditAnywhere, meta = (DisplayName = "Transparency Threshold", UIMin = 0, UIMax = 1), Category = "Behavior|Virtual Pointer")
 	float VirtualPointerTransparencyThreshold;
+	
+	UPROPERTY(EditAnywhere, meta = (DisplayName = "Custom Cursors"), Category = "Behavior|Mouse")
+	bool bCustomCursors;
 	
 #if !UE_SERVER
 	TSharedPtr<class SWebInterface> WebInterfaceWidget;
