@@ -1,4 +1,4 @@
-// Copyright 2019 Tracer Interactive, LLC. All Rights Reserved.
+// Copyright 2021 Tracer Interactive, LLC. All Rights Reserved.
 #include "WebInterface.h"
 #include "WebInterfaceObject.h"
 #include "PlatformHttp.h"
@@ -7,6 +7,7 @@
 #include "Engine/LocalPlayer.h"
 #include "Engine/World.h"
 #include "Framework/Application/SlateApplication.h"
+#include "HAL/PlatformApplicationMisc.h"
 #include "Misc/FileHelper.h"
 #include "UObject/ConstructorHelpers.h"
 #include "Widgets/SViewport.h"
@@ -47,6 +48,9 @@ UWebInterface::UWebInterface( const FObjectInitializer& ObjectInitializer )
 	MouseTransparencyThreshold = 0.333f;
 	MouseTransparencyDelay     = 0.1f;
 
+	bEnableVirtualPointerTransparency   = false;
+	VirtualPointerTransparencyThreshold = 0.333f;
+
 #if WITH_EDITOR || PLATFORM_ANDROID
 	struct FConstructorStatics
 	{
@@ -62,6 +66,34 @@ UWebInterface::UWebInterface( const FObjectInitializer& ObjectInitializer )
 	UWebBrowserTexture::StaticClass();// hard reference
 	DefaultMaterial = (UMaterial*)ConstructorStatics.DefaultTextureMaterial.Object;
 #endif
+}
+
+bool UWebInterface::Load( const FString& File )
+{
+	static FString Scheme = "pak";
+	if ( File.Len() <= 0 )
+		return false;
+
+	FString URL = Scheme;
+	if ( !URL.EndsWith( "://" ) )
+		URL += "://";
+
+	FString FilePath = File;
+	FilePath = FilePath.Replace( TEXT( "\\" ), TEXT( "/" ) );
+	FilePath = FilePath.Replace( TEXT( "//" ), TEXT( "/" ) );
+
+	URL += FilePath;
+#if !UE_SERVER
+	if ( WebInterfaceWidget.IsValid() )
+		WebInterfaceWidget->LoadURL( URL );
+#endif
+
+	FilePath = FPaths::ProjectContentDir() + File;
+	FilePath = FilePath.Replace( TEXT( "\\" ), TEXT( "/" ) );
+	FilePath = FilePath.Replace( TEXT( "//" ), TEXT( "/" ) );
+
+	const int64 FileSize = IFileManager::Get().FileSize( *FilePath );
+	return FileSize != INDEX_NONE;
 }
 
 void UWebInterface::LoadHTML( const FString& HTML )
@@ -147,6 +179,9 @@ void UWebInterface::Call( const FString& Function, const FJsonLibraryValue& Data
 		return;
 
 #if !UE_SERVER
+	if ( !WebInterfaceWidget.IsValid() )
+		return;
+
 	if ( Data.GetType() != EJsonLibraryType::Invalid )
 		WebInterfaceWidget->ExecuteJavascript( FString::Printf( TEXT( "ue.interface[%s](%s)" ),
 			*FJsonLibraryValue( Function ).Stringify(),
@@ -184,6 +219,22 @@ void UWebInterface::Unbind( const FString& Name, UObject* Object )
 #if !UE_SERVER
 	if ( WebInterfaceWidget.IsValid() )
 		WebInterfaceWidget->UnbindUObject( Name, Object );
+#endif
+}
+
+void UWebInterface::EnableIME()
+{
+#if !UE_SERVER
+	if ( WebInterfaceWidget.IsValid() )
+		WebInterfaceWidget->BindInputMethodSystem( FSlateApplication::Get().GetTextInputMethodSystem() );
+#endif
+}
+
+void UWebInterface::DisableIME()
+{
+#if !UE_SERVER
+	if ( WebInterfaceWidget.IsValid() )
+		WebInterfaceWidget->UnbindInputMethodSystem();
 #endif
 }
 
@@ -311,12 +362,53 @@ void UWebInterface::ResetMousePosition()
 	if ( !World )
 		return;
 
+#if PLATFORM_WINDOWS || PLATFORM_MAC || PLATFORM_LINUX
+	if ( !FPlatformApplicationMisc::IsThisApplicationForeground() )
+		return;
+#endif
+
 	UGameViewportClient* GameViewport = World->GetGameViewport();
 	if ( GameViewport && GameViewport->Viewport )
 	{
 		FIntPoint SizeXY = GameViewport->Viewport->GetSizeXY();
 		GameViewport->Viewport->SetMouse( SizeXY.X / 2, SizeXY.Y / 2 );
 	}
+}
+
+bool UWebInterface::IsMouseTransparencyEnabled() const
+{
+#if !UE_SERVER
+	if ( WebInterfaceWidget.IsValid() )
+		return WebInterfaceWidget->HasMouseTransparency();
+#endif
+	return false;
+}
+
+bool UWebInterface::IsVirtualPointerTransparencyEnabled() const
+{
+#if !UE_SERVER
+	if ( WebInterfaceWidget.IsValid() )
+		return WebInterfaceWidget->HasVirtualPointerTransparency();
+#endif
+	return false;
+}
+
+float UWebInterface::GetTransparencyDelay() const
+{
+#if !UE_SERVER
+	if ( WebInterfaceWidget.IsValid() )
+		return WebInterfaceWidget->GetTransparencyDelay();
+#endif
+	return 0.0f;
+}
+
+float UWebInterface::GetTransparencyThreshold() const
+{
+#if !UE_SERVER
+	if ( WebInterfaceWidget.IsValid() )
+		return WebInterfaceWidget->GetTransparencyThreshold();
+#endif
+	return 0.0f;
 }
 
 int32 UWebInterface::GetTextureWidth() const
@@ -379,9 +471,13 @@ TSharedRef<SWidget> UWebInterface::RebuildWidget()
 		.FrameRate( FrameRate )
 		.InitialURL( InitialURL )
 		.EnableMouseTransparency( bEnableMouseTransparency )
-		.MouseTransparencyDelay( MouseTransparencyDelay )
-		.MouseTransparencyThreshold( MouseTransparencyThreshold )
-		.OnUrlChanged( BIND_UOBJECT_DELEGATE( FOnTextChanged, HandleUrlChanged ) );
+		.EnableVirtualPointerTransparency( bEnableVirtualPointerTransparency )
+		.TransparencyDelay( MouseTransparencyDelay )
+		.TransparencyThreshold( bEnableVirtualPointerTransparency ?
+								VirtualPointerTransparencyThreshold :
+								MouseTransparencyThreshold )
+		.OnUrlChanged( BIND_UOBJECT_DELEGATE( FOnTextChanged, HandleUrlChanged ) )
+		.OnBeforePopup( BIND_UOBJECT_DELEGATE( FOnBeforePopupDelegate, HandleBeforePopup ) );
 
 #if WITH_CEF3
 	MyObject = NewObject<UWebInterfaceObject>();
@@ -415,19 +511,43 @@ void UWebInterface::HandleUrlChanged( const FText& URL )
 		if ( Value.GetType() == EJsonLibraryType::Array )
 		{
 			TArray<FJsonLibraryValue> Array = Value.ToArray();
-			if ( Array.Num() == 2 )
+			if ( Array.Num() == 2 || Array.Num() == 3 )
 			{
 				FJsonLibraryValue Name = Array[ 0 ];
 				FJsonLibraryValue Data = Array[ 1 ];
 				if ( Name.GetType() == EJsonLibraryType::String )
-					OnInterfaceEvent.Broadcast( FName( *Name.GetString() ), Data );
+				{
+					FName BroadcastName = *Name.GetString();
+					if ( Array.Num() > 2 )
+					{
+						FJsonLibraryValue Callback = Array[ 2 ];
+						if ( Callback.GetType() == EJsonLibraryType::String )
+						{
+							FString BroadcastCallback = Callback.GetString();
+							if ( !BroadcastCallback.IsEmpty() )
+							{
+								OnInterfaceEvent.Broadcast( BroadcastName, Data, FWebInterfaceCallback( this, BroadcastCallback ) );
+								return;
+							}
+						}
+					}
+					
+					OnInterfaceEvent.Broadcast( BroadcastName, Data, FWebInterfaceCallback() );
+					return;
+				}
 			}
-
+			
 			return;
 		}
 	}
 
 	OnUrlChangedEvent.Broadcast( URL );
+}
+
+bool UWebInterface::HandleBeforePopup( FString URL, FString Frame )
+{
+	OnPopupEvent.Broadcast( URL, Frame );
+	return true;
 }
 
 #if WITH_EDITOR

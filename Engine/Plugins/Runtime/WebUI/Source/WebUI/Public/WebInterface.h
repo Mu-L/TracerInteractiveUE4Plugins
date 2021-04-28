@@ -1,8 +1,9 @@
-// Copyright 2019 Tracer Interactive, LLC. All Rights Reserved.
+// Copyright 2021 Tracer Interactive, LLC. All Rights Reserved.
 #pragma once
 #include "Components/Widget.h"
 #include "Engine/EngineBaseTypes.h"
 #include "JsonLibrary.h"
+#include "WebInterfaceCallback.h"
 #include "WebInterface.generated.h"
 
 class UMaterial;
@@ -22,8 +23,12 @@ class WEBUI_API UWebInterface : public UWidget
 public:
 
 	DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam( FOnUrlChangedEvent, const FText&, URL );
-	DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams( FOnInterfaceEvent, const FName, Name, FJsonLibraryValue, Data );
+	DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams( FOnPopupEvent, const FString&, URL, const FString&, Frame );
+	DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams( FOnInterfaceEvent, const FName, Name, FJsonLibraryValue, Data, FWebInterfaceCallback, Callback );
 
+	// Load the browser.
+	UFUNCTION(BlueprintCallable, Category = "Web UI")
+	bool Load( const FString& File );
 	// Load HTML in the browser.
 	UFUNCTION(BlueprintCallable, Category = "Web UI")
 	void LoadHTML( const FString& HTML );
@@ -45,7 +50,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Web UI")
 	void Execute( const FString& Script );
 	// Call ue.interface.function(data) in the browser context.
-	UFUNCTION(BlueprintCallable, Category = "Web UI")
+	UFUNCTION(BlueprintCallable, Category = "Web UI", meta = (AdvancedDisplay = "Data", AutoCreateRefTerm = "Data"))
 	void Call( const FString& Function, const FJsonLibraryValue& Data );
 	
 	// Bind an object to ue.name in the browser context.
@@ -54,6 +59,13 @@ public:
 	// Unbind an object from ue.name in the browser context.
 	UFUNCTION(BlueprintCallable, Category = "Web UI")
 	void Unbind( const FString& Name, UObject* Object );
+	
+	// Enables input method editors for different languages.
+	UFUNCTION(BlueprintCallable, Category = "Web UI|Input")
+	void EnableIME();
+	// Disables input method editors for different languages.
+	UFUNCTION(BlueprintCallable, Category = "Web UI|Input")
+	void DisableIME();
 
 	// Set focus to the browser.
 	UFUNCTION(BlueprintCallable, meta = (AdvancedDisplay = "MouseLockMode"), Category = "Web UI|Helpers")
@@ -64,6 +76,20 @@ public:
 	// Reset cursor to center of the viewport.
 	UFUNCTION(BlueprintCallable, Category = "Web UI|Helpers")
 	void ResetMousePosition();
+	
+	// Check if mouse transparency is enabled.
+	UFUNCTION(BlueprintPure, Category = "Web UI|Transparency")
+	bool IsMouseTransparencyEnabled() const;
+	// Check if virtual pointer transparency is enabled.
+	UFUNCTION(BlueprintPure, Category = "Web UI|Transparency")
+	bool IsVirtualPointerTransparencyEnabled() const;
+
+	// Get the transparency delay of the browser texture.
+	UFUNCTION(BlueprintPure, Category = "Web UI|Transparency")
+	float GetTransparencyDelay() const;
+	// Get the transparency threshold of the browser texture.
+	UFUNCTION(BlueprintPure, Category = "Web UI|Transparency")
+	float GetTransparencyThreshold() const;
 
 	// Get the width of the browser texture.
 	UFUNCTION(BlueprintPure, Category = "Web UI|Textures")
@@ -82,6 +108,9 @@ public:
 	// Called when the URL has changed.
 	UPROPERTY(BlueprintAssignable, Category = "Web UI|Events")
 	FOnUrlChangedEvent OnUrlChangedEvent;
+	// Called when a popup is requested.
+	UPROPERTY(BlueprintAssignable, Category = "Web UI|Events")
+	FOnPopupEvent OnPopupEvent;
 	
 	// Called with ue.interface.broadcast(name, data) in the browser context.
 	UPROPERTY(BlueprintAssignable, Category = "Web UI|Events")
@@ -99,7 +128,9 @@ private:
 
 	UPROPERTY()
 	class UWebInterfaceObject* MyObject;
+
 	void HandleUrlChanged( const FText& URL );
+	bool HandleBeforePopup( FString URL, FString Frame );
 
 protected:
 	
@@ -114,6 +145,11 @@ protected:
 	float MouseTransparencyThreshold;
 	UPROPERTY(EditAnywhere, meta = (DisplayName = "Transparency Delay", UIMin = 0, UIMax = 1), Category = "Behavior|Mouse")
 	float MouseTransparencyDelay;
+
+	UPROPERTY(EditAnywhere, meta = (DisplayName = "Enable Transparency"), Category = "Behavior|Virtual Pointer")
+	bool bEnableVirtualPointerTransparency;
+	UPROPERTY(EditAnywhere, meta = (DisplayName = "Transparency Threshold", UIMin = 0, UIMax = 1), Category = "Behavior|Virtual Pointer")
+	float VirtualPointerTransparencyThreshold;
 	
 #if !UE_SERVER
 	TSharedPtr<class SWebInterface> WebInterfaceWidget;

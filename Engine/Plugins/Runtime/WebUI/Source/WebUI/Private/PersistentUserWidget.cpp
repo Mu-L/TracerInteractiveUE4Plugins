@@ -1,4 +1,4 @@
-// Copyright 2019 Tracer Interactive, LLC. All Rights Reserved.
+// Copyright 2021 Tracer Interactive, LLC. All Rights Reserved.
 #include "PersistentUserWidget.h"
 
 UPersistentUserWidget::UPersistentUserWidget( const FObjectInitializer& ObjectInitializer )

@@ -1,4 +1,4 @@
-// Copyright 2019 Tracer Interactive, LLC. All Rights Reserved.
+// Copyright 2021 Tracer Interactive, LLC. All Rights Reserved.
 #pragma once
 #include "CoreMinimal.h"
 #include "Engine/Texture.h"
@@ -11,6 +11,7 @@
 #include "SWebBrowserView.h"
 
 class SWebBrowserView;
+class IWebBrowserAdapter;
 class IWebBrowserDialog;
 class IWebBrowserWindow;
 struct FWebNavigationRequest;
@@ -30,8 +31,9 @@ public:
 		, _InitialURL( TEXT( "http://tracerinteractive.com" ) )
 		, _BackgroundColor( 255, 255, 255, 255 )
 		, _EnableMouseTransparency( false )
-		, _MouseTransparencyDelay( 0.1f )
-		, _MouseTransparencyThreshold( 0.333f )
+		, _EnableVirtualPointerTransparency( false )
+		, _TransparencyDelay( 0.1f )
+		, _TransparencyThreshold( 0.333f )
 		, _ViewportSize( FVector2D::ZeroVector )
 	{
 		_Visibility = EVisibility::SelfHitTestInvisible;
@@ -42,8 +44,9 @@ public:
 		SLATE_ARGUMENT( TOptional<FString>, ContentsToLoad )
 		SLATE_ARGUMENT( FColor, BackgroundColor )
 		SLATE_ARGUMENT( bool, EnableMouseTransparency )
-		SLATE_ARGUMENT( float, MouseTransparencyDelay )
-		SLATE_ARGUMENT( float, MouseTransparencyThreshold )
+		SLATE_ARGUMENT( bool, EnableVirtualPointerTransparency )
+		SLATE_ARGUMENT( float, TransparencyDelay )
+		SLATE_ARGUMENT( float, TransparencyThreshold )
 		SLATE_ARGUMENT( TOptional<EPopupMethod>, PopupMenuMethod )
 
 		SLATE_ATTRIBUTE( FVector2D, ViewportSize );
@@ -86,6 +89,8 @@ private:
 
 protected:
 
+	static bool bPAK;
+
 	TSharedPtr<SWebBrowserView>   BrowserView;
 	TSharedPtr<IWebBrowserWindow> BrowserWindow;
 
@@ -93,7 +98,9 @@ protected:
 	TMap<TWeakPtr<IWebBrowserWindow>, TWeakPtr<SWindow>> BrowserWindowWidgets;
 #endif
 
-	bool  bMouseTransparency;
+	bool bMouseTransparency;
+	bool bVirtualPointerTransparency;
+
 	float TransparencyDelay;
 	float TransparencyThreadshold;
 
@@ -117,6 +124,12 @@ protected:
 
 public:
 
+	bool HasMouseTransparency() const;
+	bool HasVirtualPointerTransparency() const;
+
+	float GetTransparencyDelay() const;
+	float GetTransparencyThreshold() const;
+
 	int32 GetTextureWidth() const;
 	int32 GetTextureHeight() const;
 
@@ -138,5 +151,11 @@ public:
 
 	void BindUObject( const FString& Name, UObject* Object, bool bIsPermanent = true );
 	void UnbindUObject( const FString& Name, UObject* Object, bool bIsPermanent = true );
+
+	void BindAdapter( const TSharedRef<IWebBrowserAdapter>& Adapter );
+	void UnbindAdapter( const TSharedRef<IWebBrowserAdapter>& Adapter );
+
+	void BindInputMethodSystem( ITextInputMethodSystem* TextInputMethodSystem );
+	void UnbindInputMethodSystem();
 };
 #endif
