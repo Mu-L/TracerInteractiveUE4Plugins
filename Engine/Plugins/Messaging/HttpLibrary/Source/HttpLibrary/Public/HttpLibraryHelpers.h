@@ -1,4 +1,4 @@
-// Copyright 2019 Tracer Interactive, LLC. All Rights Reserved.
+// Copyright 2021 Tracer Interactive, LLC. All Rights Reserved.
 #pragma once
 #include "CoreMinimal.h"
 #include "Kismet/BlueprintFunctionLibrary.h"
@@ -50,7 +50,11 @@ public:
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Set HTTP Timeout"), Category = "HTTP Library|Settings")
 	static void SetHttpTimeout( float Timeout );
 
+#if UE_EDITOR
 protected:
+#else
+public:
+#endif
 	
 	// Construct a HTTP request object.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Construct HTTP", CompactNodeTitle = "HTTP", AutoCreateRefTerm = "Response"), Category = "HTTP Library|Request")
